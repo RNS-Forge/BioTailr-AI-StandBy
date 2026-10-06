@@ -62,7 +62,8 @@ try {
 }
 
 const cdpPort = profile.settings?.cdpPort || 9222;
-const batchTarget = profile.settings?.batchTarget || 5;
+const batchTarget = (profile.settings?.batchTarget === 0 || profile.settings?.batchTarget === 'unlimited') ? Infinity : (profile.settings?.batchTarget || Infinity);
+
 
 function log(tag, message) {
   const ts = new Date().toLocaleTimeString([], { hour12: false });
@@ -127,9 +128,15 @@ async function runAutoApply() {
 
   const appliedJobs = [];
 
-  for (let jobIndex = 1; jobIndex <= batchTarget; jobIndex++) {
+  let jobIndex = 0;
+  let currentPage = 1;
+  let hasMoreJobs = true;
+
+  while (jobIndex < batchTarget && hasMoreJobs) {
+    jobIndex++;
     console.log(`\n----------------------------------------------------`);
-    log('BATCH', `[${jobIndex}/${batchTarget}] Inspecting current active job card...`);
+    const targetLabel = batchTarget === Infinity ? 'Unlimited' : String(batchTarget);
+    log('BATCH', `[Job #${jobIndex} | Page ${currentPage} | Target: ${targetLabel}] Inspecting current active job card...`);
     console.log(`----------------------------------------------------`);
 
     const jobInfo = await cdpEval(ws, `(() => {
@@ -148,7 +155,22 @@ async function runAutoApply() {
 
     if (!jobInfo.hasEasyApply) {
       log('SKIP', 'Easy Apply button not present on current job card. Moving to next card in search feed...');
-      await selectNextFeedCard(ws);
+      let nextJob = await selectNextFeedCard(ws);
+      if (!nextJob || !nextJob.found) {
+        await scrollFeedContainer(ws);
+        await sleep(1500);
+        nextJob = await selectNextFeedCard(ws);
+      }
+      if (!nextJob || !nextJob.found) {
+        const paged = await goToNextSearchPage(ws);
+        if (paged.success) {
+          currentPage++;
+          log('PAGINATION', `Advanced to Search Results Page ${currentPage}. Loading fresh jobs...`);
+          await sleep(3500);
+        } else {
+          hasMoreJobs = false;
+        }
+      }
       await sleep(2000);
       continue;
     }
@@ -164,7 +186,7 @@ async function runAutoApply() {
     let stepCount = 0;
     let submitted = false;
 
-    while (stepCount < 20) {
+    while (stepCount < 60) {
       stepCount++;
       await sleep(400);
 
@@ -264,12 +286,13 @@ async function runAutoApply() {
         }
       }
 
-      // 3. Candidate Context & Reasoning Value Setter with Combobox Selection
+      // 3. Candidate Context, Reasoning Value Setter & Edit Experience Resolver
       await cdpEval(ws, `(() => {
         const modal = document.querySelector('dialog, [role="dialog"], .jobs-easy-apply-modal, .artdeco-modal');
         if (!modal) return;
 
         const setVal = (el, val) => {
+          if (!el) return;
           const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement?.prototype : window.HTMLInputElement?.prototype;
           const setter = Object.getOwnPropertyDescriptor(proto || {}, 'value')?.set
             || Object.getOwnPropertyDescriptor(el.__proto__ || {}, 'value')?.set;
@@ -280,6 +303,69 @@ async function runAutoApply() {
           el.dispatchEvent(new Event('blur', { bubbles: true }));
         };
 
+        // A. Resolve "Edit experience" sub-card if visible or if validation errors exist
+        const isExpForm = Array.from(modal.querySelectorAll('*')).some(el => /edit\s*experience|add\s*work\s*experience/i.test(el.innerText || ''));
+        const hasFormErrors = Boolean(modal.querySelector('.artdeco-inline-feedback--error, [data-test-form-element-error-messages]'));
+
+        if (isExpForm || hasFormErrors) {
+          // 1. Title input
+          const titleInput = modal.querySelector('input[id*="title"], input[name*="title"], input[aria-label*="title"]')
+            || Array.from(modal.querySelectorAll('input[type="text"]')).find(i => {
+              const p = i.closest('.fb-dash-form-element, div');
+              return /title/i.test(p?.innerText || '');
+            });
+          if (titleInput && (!titleInput.value || titleInput.value.length < 2)) {
+            setVal(titleInput, 'Full Stack & AI Engineer');
+          }
+
+          // 2. Company input
+          const compInput = modal.querySelector('input[id*="company"], input[name*="company"], input[aria-label*="company"]')
+            || Array.from(modal.querySelectorAll('input[type="text"]')).find(i => {
+              const p = i.closest('.fb-dash-form-element, div');
+              return /company/i.test(p?.innerText || '');
+            });
+          if (compInput && (!compInput.value || compInput.value.length < 2)) {
+            setVal(compInput, 'Axodian');
+          }
+
+          // 3. Month & Year selects in Dates of employment
+          const selects = Array.from(modal.querySelectorAll('select'));
+          selects.forEach(sel => {
+            const p = sel.closest('.fb-dash-form-element, div, fieldset');
+            const txt = ((sel.getAttribute('aria-label') || '') + ' ' + (sel.id || '') + ' ' + (p?.innerText || '')).toLowerCase();
+            if (/month/i.test(txt) && sel.selectedIndex <= 0) {
+              const idx = Array.from(sel.options).findIndex(o => /january|jan|^1$/i.test(o.text.trim()));
+              sel.selectedIndex = idx !== -1 ? idx : (sel.options.length > 1 ? 1 : 0);
+              sel.dispatchEvent(new Event('change', { bubbles: true }));
+            } else if (/year/i.test(txt) && sel.selectedIndex <= 0) {
+              const yIdx = Array.from(sel.options).findIndex(o => /2022|2021|2023/.test(o.text));
+              sel.selectedIndex = yIdx !== -1 ? yIdx : (sel.options.length > 1 ? 1 : 0);
+              sel.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+          });
+
+          // 4. "I currently work here" checkbox
+          const workCb = modal.querySelector('input[type="checkbox"][id*="current"], input[type="checkbox"]');
+          if (workCb && !workCb.checked) {
+            workCb.click();
+            workCb.checked = true;
+            workCb.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+
+          // 5. If sub-card Save button exists, click it to persist
+          const saveBtn = Array.from(modal.querySelectorAll('button')).find(b => /^save$/i.test(b.innerText.trim()));
+          if (saveBtn) {
+            saveBtn.click();
+          }
+        }
+
+        // B. Handle Delete Experience confirmation if dialog appeared
+        const delConfirm = document.querySelector('.artdeco-modal__confirm-dialog-btn, button[data-control-name="confirm_delete"], button[data-test-dialog-primary-btn]');
+        if (delConfirm) {
+          delConfirm.click();
+        }
+
+        // C. Standard Form Elements Filling
         const rawInputs = Array.from(modal.querySelectorAll('input:not([type="hidden"]), select, textarea')).filter(el => {
           return !el.disabled && !el.readOnly && (el.offsetWidth > 0 || el.offsetHeight > 0 || el.type === 'radio' || el.type === 'checkbox');
         });
@@ -344,10 +430,14 @@ async function runAutoApply() {
           } else if (el.tagName === 'SELECT') {
             const opts = Array.from(el.options);
             let matchIdx = -1;
-            if (/month/i.test(labelText)) {
+            if (/additional\s*month/i.test(labelText)) {
               matchIdx = opts.findIndex(o => o.text.includes('0'));
+            } else if (/month/i.test(labelText)) {
+              matchIdx = opts.findIndex(o => /january|jan|^1$/i.test(o.text.trim()));
+              if (matchIdx === -1 && opts.length > 1) matchIdx = 1;
             } else if (/year/i.test(labelText)) {
-              matchIdx = opts.findIndex(o => o.text.includes('2022') || o.text.includes('2026'));
+              matchIdx = opts.findIndex(o => /2022|2021|2023/i.test(o.text));
+              if (matchIdx === -1 && opts.length > 1) matchIdx = 1;
             } else {
               matchIdx = opts.findIndex(o => o.text.trim().toLowerCase() === 'yes' || o.text.includes('Yes'));
             }
@@ -395,6 +485,7 @@ async function runAutoApply() {
           opt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
           opt.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
           opt.click();
+        }
       })()`);
 
       // 3. Navigation Check: Submit Application
@@ -480,8 +571,38 @@ async function runAutoApply() {
 
     if (jobIndex < batchTarget) {
       log('TRANSITION', 'Selecting next job card in search feed...');
-      await selectNextFeedCard(ws);
-      await sleep(2000);
+      let nextJob = await selectNextFeedCard(ws);
+
+      if (!nextJob || !nextJob.found) {
+        log('FEED', 'End of visible cards. Scrolling search feed down to load more...');
+        await scrollFeedContainer(ws);
+        await sleep(1500);
+        nextJob = await selectNextFeedCard(ws);
+      }
+
+      if (!nextJob || !nextJob.found) {
+        log('PAGINATION', `Page ${currentPage} completed. Checking for next search page...`);
+        const paged = await goToNextSearchPage(ws);
+        if (paged.success) {
+          currentPage++;
+          log('PAGINATION', `Advanced to Search Results Page ${currentPage}. Loading fresh jobs...`);
+          await sleep(3500);
+          nextJob = await selectNextFeedCard(ws);
+          if (!nextJob || !nextJob.found) {
+            await scrollFeedContainer(ws);
+            await sleep(1500);
+            nextJob = await selectNextFeedCard(ws);
+          }
+        }
+      }
+
+      if (nextJob && nextJob.found) {
+        log('TRANSITION', `Targeting: "${nextJob.title}"`);
+        await sleep(2000);
+      } else {
+        log('COMPLETE', 'Reached the end of all search result pages. All Easy Apply jobs applied!');
+        hasMoreJobs = false;
+      }
     }
   }
 
@@ -513,6 +634,55 @@ async function selectNextFeedCard(ws) {
       }
     }
     return { found: false };
+  })()`);
+}
+
+async function scrollFeedContainer(ws) {
+  return await cdpEval(ws, `(() => {
+    const list = document.querySelector('.jobs-search-results-list, .jobs-search-results, div[data-view-name="job-search-results-list"], .scaffold-layout__list-detail');
+    if (list) {
+      list.scrollTop += 800;
+      return true;
+    }
+    window.scrollBy(0, 800);
+    return false;
+  })()`);
+}
+
+async function goToNextSearchPage(ws) {
+  return await cdpEval(ws, `(() => {
+    // 1. Next button in pagination
+    const nextBtn = document.querySelector('button[aria-label="View next page"], button[aria-label="Next"], .jobs-search-pagination__button--next')
+      || Array.from(document.querySelectorAll('button')).find(b => {
+        const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+        const txt = (b.innerText || '').toLowerCase().trim();
+        return (aria.includes('next page') || txt === 'next') && !b.disabled && b.offsetWidth > 0;
+      });
+
+    if (nextBtn && !nextBtn.disabled) {
+      nextBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
+      nextBtn.click();
+      return { success: true };
+    }
+
+    // 2. Next numeric page button (e.g. active is page 1, look for page 2)
+    const activePageBtn = document.querySelector('.jobs-search-pagination__indicator-button--active, [data-test-pagination-page-btn].active, button[aria-current="true"]');
+    if (activePageBtn) {
+      const activeNum = parseInt(activePageBtn.innerText.trim(), 10);
+      if (!isNaN(activeNum)) {
+        const targetPage = activeNum + 1;
+        const targetBtn = Array.from(document.querySelectorAll('button')).find(b => {
+          return b.innerText.trim() === String(targetPage) && !b.disabled && b.offsetWidth > 0;
+        });
+        if (targetBtn) {
+          targetBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
+          targetBtn.click();
+          return { success: true };
+        }
+      }
+    }
+
+    return { success: false };
   })()`);
 }
 

@@ -32,7 +32,7 @@
     "gradYear": "2026"
   },
   "settings": {
-    "batchTarget": 5,
+    "batchTarget": 0,
     "cdpPort": 9222,
     "scrollDelayMs": 350,
     "actionDelayMs": 1000
