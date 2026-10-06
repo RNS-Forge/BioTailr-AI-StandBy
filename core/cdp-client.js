@@ -76,11 +76,28 @@ function cdpEval(ws, expression, awaitPromise = false) {
   });
 }
 
+function cdpSend(ws, method, params = {}) {
+  return new Promise((resolve, reject) => {
+    const id = Math.floor(Math.random() * 1000000);
+    const handler = (event) => {
+      const parsed = JSON.parse(event.data);
+      if (parsed.id === id) {
+        ws.removeEventListener('message', handler);
+        if (parsed.error) reject(new Error(parsed.error.message || JSON.stringify(parsed.error)));
+        else resolve(parsed.result);
+      }
+    };
+    ws.addEventListener('message', handler);
+    ws.send(JSON.stringify({ id, method, params }));
+  });
+}
+
 module.exports = {
   log,
   sleep,
   getBrowserTabs,
   getTargetTab,
   connectWebSocket,
-  cdpEval
+  cdpEval,
+  cdpSend
 };

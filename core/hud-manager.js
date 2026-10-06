@@ -1,52 +1,97 @@
 /**
  * BioTailr AI StandBy - HUD Manager
  * Injects and manages the live on-screen StandBy HUD directly inside Google Chrome via CDP.
- * Built with pure DOM Nodes to guarantee 100% CSP and Trusted Types compliance on LinkedIn.
+ * Harmonized with Chrome Extension screen-hud.js (100% unified IDs and styles).
  * Features:
+ * - Single-instance enforcement (removes duplicate or competing HUDs)
+ * - Pure DOM Nodes (100% immune to LinkedIn CSP / Trusted Types innerHTML sanitization)
  * - Collapsed: Floating Pill ("BioTailr AI Agent") with pulsating emerald status dot
  * - Expanded: Panel ("BioTailr Autonomous Agent") positioned smoothly above pill
- * - Proper Hide and Drop: Clicking pill opens/drops panel; clicking [x] or pill hides panel
+ * - Proper Hide and Drop: Clicking pill opens/drops panel; clicking [x] hides panel
+ * - Direct Start on Click: Clicking "AUTO-APPLY NOW" or clicking the Ready pill triggers auto-apply
  * - Normal 1px uniform border all around (#e2e8f0) with NO colored top-border highlight
- * - Bottom-anchored 60fps dragging all over the screen with glass overlay
+ * - Bottom-anchored 60fps dragging with lazy glass overlay (no mousedown interference)
  */
 
 const { cdpEval } = require('./cdp-client');
 
 async function ensureHudInjected(ws) {
   await cdpEval(ws, `(() => {
-    // Remove any existing HUD instances to avoid duplicates
-    const extHud = document.getElementById('biotailr-agent-hud');
-    if (extHud) extHud.remove();
+    // 1. Initialize State
+    window.__bioTailrState = window.__bioTailrState || {
+      isStarted: false,
+      isPaused: false,
+      logCount: 2
+    };
 
-    const existing = document.getElementById('biotailr-standby-hud');
-    const savedLeft = (existing && existing.style.left && existing.style.left !== 'auto') ? existing.style.left : '';
-    const savedBottom = (existing && existing.style.bottom && existing.style.bottom !== 'auto') ? existing.style.bottom : '24px';
-    const wasClosed = existing ? !existing.querySelector('.bt-hud-panel')?.classList.contains('open') : false;
+    // 2. Remove any conflicting or stale StandBy HUDs so only ONE HUD is ever on screen
+    const staleHuds = document.querySelectorAll('#biotailr-standby-hud');
+    staleHuds.forEach(el => el.remove());
 
-    if (existing) {
-      existing.remove();
+    // 3. Helper to trigger Auto-Apply across both DOM and Window state
+    const triggerStart = (host) => {
+      window.__bioTailrState = window.__bioTailrState || {};
+      window.__bioTailrState.isStarted = true;
+      window.__bioTailrState.isPaused = false;
+      if (host) {
+        host.setAttribute('data-bt-started', 'true');
+        host.setAttribute('data-bt-paused', 'false');
+      }
+      document.body.setAttribute('data-bt-started', 'true');
+      document.body.setAttribute('data-bt-paused', 'false');
+      document.dispatchEvent(new CustomEvent('biotailr:start', { detail: { time: Date.now() } }));
+
+      if (typeof window.__bioTailrAppendLog === 'function') {
+        window.__bioTailrAppendLog('START', 'Auto-Apply started by user from StandBy HUD.');
+      }
+      if (typeof window.__bioTailrSyncUI === 'function') {
+        window.__bioTailrSyncUI();
+      }
+    };
+
+    // 4. Check if unified HUD already exists on the page
+    let host = document.getElementById('biotailr-agent-hud');
+
+    if (host) {
+      // Connect to existing HUD
+      const autoBtn = host.querySelector('#bt-btn-auto-apply, #bt-main-start-btn');
+      if (autoBtn && !autoBtn.__btBound) {
+        autoBtn.__btBound = true;
+        autoBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          triggerStart(host);
+        });
+      }
+      const pill = host.querySelector('#bt-hud-pill, .bt-hud-pill');
+      if (pill && !pill.__btBound) {
+        pill.__btBound = true;
+        pill.addEventListener('click', (e) => {
+          const panel = host.querySelector('#bt-hud-panel, .bt-hud-panel');
+          if (panel && !panel.classList.contains('open')) {
+            panel.classList.add('open');
+          } else if (!window.__bioTailrState.isStarted) {
+            triggerStart(host);
+          }
+        });
+      }
+      return;
     }
 
-    const host = document.createElement('div');
-    host.id = 'biotailr-standby-hud';
+    // 5. Create Fresh Unified HUD using Pure DOM Nodes
+    host = document.createElement('div');
+    host.id = 'biotailr-agent-hud';
     host.style.position = 'fixed';
-    host.style.bottom = savedBottom;
-    if (savedLeft) {
-      host.style.left = savedLeft;
-      host.style.right = 'auto';
-    } else {
-      host.style.right = '24px';
-      host.style.left = 'auto';
-    }
+    host.style.bottom = '24px';
+    host.style.right = '24px';
     host.style.zIndex = '9999999';
     host.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
     host.style.userSelect = 'none';
     host.style.color = '#0f172a';
+    host.style.pointerEvents = 'auto';
 
-    // 1. Inject Stylesheet via Pure DOM Node
     const style = document.createElement('style');
     style.textContent = \`
-      #biotailr-standby-hud * {
+      #biotailr-agent-hud * {
         box-sizing: border-box;
       }
       .bt-hud-pill {
@@ -61,14 +106,20 @@ async function ensureHudInjected(ws) {
         font-size: 13px;
         font-weight: 600;
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.04);
-        cursor: pointer;
+        cursor: pointer !important;
+        pointer-events: auto !important;
         transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        user-select: none;
       }
       .bt-hud-pill:hover {
-        border-color: #059669;
-        color: #059669;
-        box-shadow: 0 6px 16px rgba(5, 150, 105, 0.15);
+        border-color: #059669 !important;
+        color: #059669 !important;
+        box-shadow: 0 6px 16px rgba(5, 150, 105, 0.2) !important;
         transform: translateY(-1px);
+      }
+      .bt-hud-pill:active {
+        transform: translateY(0);
+        box-shadow: 0 2px 6px rgba(5, 150, 105, 0.15) !important;
       }
       .bt-pulse-dot {
         width: 8px;
@@ -78,6 +129,16 @@ async function ensureHudInjected(ws) {
         box-shadow: 0 0 0 2px #d1fae5;
         flex-shrink: 0;
         transition: all 0.2s ease;
+      }
+      .bt-pulse-dot.working {
+        background: #2563eb;
+        box-shadow: 0 0 0 2px #dbeafe;
+        animation: bt-pulse 1.4s infinite;
+      }
+      @keyframes bt-pulse {
+        0% { transform: scale(0.9); opacity: 0.8; }
+        50% { transform: scale(1.15); opacity: 1; }
+        100% { transform: scale(0.9); opacity: 0.8; }
       }
       .bt-hud-panel {
         display: none;
@@ -90,6 +151,7 @@ async function ensureHudInjected(ws) {
         overflow: hidden;
         margin-bottom: 10px;
         cursor: default;
+        pointer-events: auto !important;
       }
       .bt-hud-panel.open {
         display: flex !important;
@@ -102,7 +164,7 @@ async function ensureHudInjected(ws) {
         background: #f8fafc;
         border-bottom: 1px solid #e2e8f0;
         border-radius: 6px 6px 0 0;
-        cursor: grab;
+        cursor: grab !important;
         user-select: none;
       }
       .bt-hud-title {
@@ -125,18 +187,25 @@ async function ensureHudInjected(ws) {
         text-transform: uppercase;
         letter-spacing: 0.5px;
       }
+      .bt-hud-badge.active {
+        background: #ecfdf5;
+        color: #047857;
+      }
       .bt-hud-close {
         background: transparent;
         border: none;
         color: #64748b;
-        cursor: pointer;
+        cursor: pointer !important;
+        pointer-events: auto !important;
         padding: 2px 6px;
         border-radius: 4px;
         font-size: 16px;
         line-height: 1;
+        transition: all 0.15s ease;
       }
       .bt-hud-close:hover {
-        color: #0f172a;
+        color: #0f172a !important;
+        background: #e2e8f0;
       }
       .bt-hud-body {
         padding: 14px;
@@ -154,7 +223,7 @@ async function ensureHudInjected(ws) {
         gap: 3px;
       }
       .bt-hud-job-title {
-        font-size: 12px;
+        font-size: 13px;
         font-weight: 600;
         color: #0f172a;
         white-space: nowrap;
@@ -167,7 +236,7 @@ async function ensureHudInjected(ws) {
         font-weight: 500;
         display: flex;
         align-items: center;
-        gap: 6px;
+        gap: 5px;
       }
       .bt-hud-feed {
         height: 120px;
@@ -176,14 +245,12 @@ async function ensureHudInjected(ws) {
         border-radius: 6px;
         padding: 8px 10px;
         overflow-y: auto;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-family: "JetBrains Mono", Consolas, monospace;
         font-size: 11px;
         color: #334155;
         display: flex;
         flex-direction: column;
         gap: 4px;
-        line-height: 1.4;
-        word-break: break-all;
       }
       .bt-btn-primary {
         flex: 1;
@@ -198,12 +265,17 @@ async function ensureHudInjected(ws) {
         font-weight: 600;
         padding: 9px 14px;
         border-radius: 6px;
-        cursor: pointer;
+        cursor: pointer !important;
+        pointer-events: auto !important;
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
         transition: all 0.15s ease;
       }
       .bt-btn-primary:hover {
-        background: #047857;
+        background: #047857 !important;
+        box-shadow: 0 2px 8px rgba(5, 150, 105, 0.3) !important;
+      }
+      .bt-btn-primary:active {
+        transform: translateY(1px);
       }
       .bt-btn-secondary {
         display: flex;
@@ -217,8 +289,13 @@ async function ensureHudInjected(ws) {
         font-weight: 600;
         padding: 9px 12px;
         border-radius: 6px;
-        cursor: pointer;
+        cursor: pointer !important;
+        pointer-events: auto !important;
         transition: all 0.15s ease;
+      }
+      .bt-btn-secondary:hover {
+        background: #f8fafc !important;
+        border-color: #94a3b8 !important;
       }
       .bt-btn-dl {
         display: flex;
@@ -233,13 +310,16 @@ async function ensureHudInjected(ws) {
         font-weight: 600;
         padding: 7px 10px;
         border-radius: 6px;
-        cursor: pointer;
+        cursor: pointer !important;
+        pointer-events: auto !important;
         transition: all 0.15s ease;
+      }
+      .bt-btn-dl:hover {
+        background: #f8fafc !important;
       }
     \`;
     host.appendChild(style);
 
-    // Helper: SVG Builder
     const makeSvg = (w, h, vb, inner) => {
       const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
       svg.setAttribute('width', String(w));
@@ -254,12 +334,11 @@ async function ensureHudInjected(ws) {
       return svg;
     };
 
-    // 2. Build Panel (Expanded State)
+    // Panel
     const panel = document.createElement('div');
-    panel.className = 'bt-hud-panel' + (wasClosed ? '' : ' open');
+    panel.className = 'bt-hud-panel open';
     panel.id = 'bt-hud-panel';
 
-    // Header
     const header = document.createElement('div');
     header.className = 'bt-hud-header';
     header.id = 'bt-panel-header';
@@ -281,18 +360,17 @@ async function ensureHudInjected(ws) {
 
     const badge = document.createElement('span');
     badge.className = 'bt-hud-badge';
-    badge.id = 'bt-status-pill';
+    badge.id = 'bt-hud-badge';
     badge.textContent = 'STANDBY';
 
     const closeBtn = document.createElement('button');
     closeBtn.className = 'bt-hud-close';
-    closeBtn.id = 'bt-close-btn';
+    closeBtn.id = 'bt-hud-close-btn';
     closeBtn.setAttribute('aria-label', 'Close panel');
     closeBtn.textContent = '×';
 
     rightBox.appendChild(badge);
     rightBox.appendChild(closeBtn);
-
     header.appendChild(titleBox);
     header.appendChild(rightBox);
 
@@ -300,19 +378,18 @@ async function ensureHudInjected(ws) {
     const body = document.createElement('div');
     body.className = 'bt-hud-body';
 
-    // Target Box
     const info = document.createElement('div');
     info.className = 'bt-hud-info';
     const jobTitle = document.createElement('div');
     jobTitle.className = 'bt-hud-job-title';
-    jobTitle.id = 'bt-target-job';
+    jobTitle.id = 'bt-hud-job-title';
     jobTitle.textContent = 'LinkedIn Job Search Feed';
 
     const model = document.createElement('div');
     model.className = 'bt-hud-model';
     const sparkleSvg = makeSvg(12, 12, '0 0 24 24', '<path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M4.93 19.07l14.14-14.14"/>');
     const compText = document.createElement('span');
-    compText.id = 'bt-target-company';
+    compText.id = 'bt-hud-model-text';
     compText.textContent = 'Google Gemini Engine (Project Key)';
     model.appendChild(sparkleSvg);
     model.appendChild(compText);
@@ -320,10 +397,9 @@ async function ensureHudInjected(ws) {
     info.appendChild(jobTitle);
     info.appendChild(model);
 
-    // Feed Box
     const feed = document.createElement('div');
     feed.className = 'bt-hud-feed';
-    feed.id = 'bt-log-stream';
+    feed.id = 'bt-hud-feed';
 
     const line1 = document.createElement('div');
     line1.innerHTML = '<span style="color:#94a3b8;">[INIT]</span> Screen Agent initialized on LinkedIn.';
@@ -332,26 +408,25 @@ async function ensureHudInjected(ws) {
     feed.appendChild(line1);
     feed.appendChild(line2);
 
-    // Actions
     const actions = document.createElement('div');
     actions.style.display = 'flex';
     actions.style.gap = '8px';
 
-    const mainBtn = document.createElement('button');
-    mainBtn.className = 'bt-btn-primary';
-    mainBtn.id = 'bt-main-start-btn';
+    const autoBtn = document.createElement('button');
+    autoBtn.className = 'bt-btn-primary';
+    autoBtn.id = 'bt-btn-auto-apply';
     const playSvg = makeSvg(12, 12, '0 0 24 24', '<polygon points="6 4 20 12 6 20 6 4"/>');
     playSvg.setAttribute('fill', 'currentColor');
     playSvg.setAttribute('stroke', 'none');
     const btnText = document.createElement('span');
-    btnText.id = 'bt-main-start-text';
+    btnText.id = 'bt-btn-text';
     btnText.textContent = 'AUTO-APPLY NOW';
-    mainBtn.appendChild(playSvg);
-    mainBtn.appendChild(btnText);
+    autoBtn.appendChild(playSvg);
+    autoBtn.appendChild(btnText);
 
     const nextBtn = document.createElement('button');
     nextBtn.className = 'bt-btn-secondary';
-    nextBtn.id = 'bt-next-btn';
+    nextBtn.id = 'bt-btn-next-job';
     nextBtn.setAttribute('title', 'Skip to next job');
     const nextText = document.createElement('span');
     nextText.textContent = 'Next Job';
@@ -359,13 +434,12 @@ async function ensureHudInjected(ws) {
     nextBtn.appendChild(nextText);
     nextBtn.appendChild(nextSvg);
 
-    actions.appendChild(mainBtn);
+    actions.appendChild(autoBtn);
     actions.appendChild(nextBtn);
 
-    // Download Button
     const dlBtn = document.createElement('button');
     dlBtn.className = 'bt-btn-dl';
-    dlBtn.id = 'bt-dl-btn';
+    dlBtn.id = 'bt-btn-download-runner';
     const dlSvg = makeSvg(12, 12, '0 0 24 24', '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line>');
     const dlText = document.createElement('span');
     dlText.textContent = 'Download Desktop Runner (ZIP)';
@@ -380,14 +454,17 @@ async function ensureHudInjected(ws) {
     panel.appendChild(header);
     panel.appendChild(body);
 
-    // 3. Build Pill (Collapsed State)
+    // Pill
     const pill = document.createElement('div');
     pill.className = 'bt-hud-pill';
     pill.id = 'bt-hud-pill';
+    pill.setAttribute('role', 'button');
+    pill.setAttribute('tabindex', '0');
     const pillDot = document.createElement('span');
     pillDot.className = 'bt-pulse-dot';
     pillDot.id = 'bt-pill-dot';
     const pillText = document.createElement('span');
+    pillText.id = 'bt-pill-text';
     pillText.textContent = 'BioTailr AI Agent';
     pill.appendChild(pillDot);
     pill.appendChild(pillText);
@@ -396,13 +473,7 @@ async function ensureHudInjected(ws) {
     host.appendChild(pill);
     document.body.appendChild(host);
 
-    window.__bioTailrState = window.__bioTailrState || {
-      isStarted: false,
-      isPaused: false,
-      logCount: 2
-    };
-
-    // 4. Hide and Drop Feature Controller
+    // Toggle Hide / Drop
     let didDrag = false;
 
     const togglePanel = (open) => {
@@ -417,7 +488,6 @@ async function ensureHudInjected(ws) {
 
     closeBtn.onclick = (e) => {
       e.stopPropagation();
-      e.preventDefault();
       togglePanel(false);
     };
 
@@ -426,10 +496,22 @@ async function ensureHudInjected(ws) {
         didDrag = false;
         return;
       }
-      togglePanel();
+      e.preventDefault();
+      e.stopPropagation();
+
+      const isOpen = panel.classList.contains('open');
+      if (!isOpen) {
+        togglePanel(true);
+      } else {
+        if (!window.__bioTailrState.isStarted) {
+          triggerStart(host);
+        } else {
+          togglePanel(false);
+        }
+      }
     };
 
-    // 5. Smooth 60fps Bottom-Anchored Dragging
+    // Smooth Dragging: header (when open) or pill (when collapsed)
     let isDragging = false;
     let dragStartX = 0;
     let dragStartY = 0;
@@ -437,8 +519,8 @@ async function ensureHudInjected(ws) {
     let initialBottom = 0;
     let dragOverlay = null;
 
-    host.addEventListener('mousedown', (e) => {
-      if (e.target.closest('button, input, textarea, select, a, .bt-hud-feed, [role="button"]')) return;
+    const startDrag = (e) => {
+      if (e.target.closest('button, input, textarea, select, a, .bt-hud-close, .bt-hud-feed')) return;
       if (e.button !== 0) return;
 
       didDrag = false;
@@ -450,35 +532,31 @@ async function ensureHudInjected(ws) {
       initialLeft = rect.left;
       initialBottom = window.innerHeight - rect.bottom;
 
-      host.style.left = initialLeft + 'px';
-      host.style.bottom = initialBottom + 'px';
-      host.style.right = 'auto';
-      host.style.top = 'auto';
-      host.style.transition = 'none';
-
-      if (!dragOverlay) {
-        dragOverlay = document.createElement('div');
-        dragOverlay.id = 'bt-standby-drag-overlay';
-        dragOverlay.style.position = 'fixed';
-        dragOverlay.style.top = '0';
-        dragOverlay.style.left = '0';
-        dragOverlay.style.width = '100vw';
-        dragOverlay.style.height = '100vh';
-        dragOverlay.style.zIndex = '99999999';
-        dragOverlay.style.cursor = 'grabbing';
-        dragOverlay.style.userSelect = 'none';
-        dragOverlay.style.background = 'transparent';
-        document.body.appendChild(dragOverlay);
-      }
-
       const onMouseMove = (moveEv) => {
         if (!isDragging) return;
         const dx = moveEv.clientX - dragStartX;
         const dy = moveEv.clientY - dragStartY;
 
-        if (Math.hypot(dx, dy) > 4) {
+        if (!didDrag && Math.hypot(dx, dy) > 8) {
           didDrag = true;
+          if (!dragOverlay) {
+            dragOverlay = document.createElement('div');
+            dragOverlay.id = 'bt-standby-drag-overlay';
+            dragOverlay.style.position = 'fixed';
+            dragOverlay.style.top = '0';
+            dragOverlay.style.left = '0';
+            dragOverlay.style.width = '100vw';
+            dragOverlay.style.height = '100vh';
+            dragOverlay.style.zIndex = '99999999';
+            dragOverlay.style.cursor = 'grabbing';
+            dragOverlay.style.userSelect = 'none';
+            dragOverlay.style.background = 'transparent';
+            document.body.appendChild(dragOverlay);
+          }
+          host.style.transition = 'none';
         }
+
+        if (!didDrag) return;
 
         let newLeft = initialLeft + dx;
         let newBottom = initialBottom - dy;
@@ -493,6 +571,8 @@ async function ensureHudInjected(ws) {
 
         host.style.left = newLeft + 'px';
         host.style.bottom = newBottom + 'px';
+        host.style.right = 'auto';
+        host.style.top = 'auto';
       };
 
       const onMouseUp = () => {
@@ -507,89 +587,84 @@ async function ensureHudInjected(ws) {
 
       window.addEventListener('mousemove', onMouseMove, { capture: true, passive: false });
       window.addEventListener('mouseup', onMouseUp, { capture: true });
-    });
+    };
 
-    // 6. Automation State Syncing
+    header.addEventListener('mousedown', startDrag);
+    pill.addEventListener('mousedown', startDrag);
+
+    // State UI Synchronization
     function syncStateUI() {
       if (!window.__bioTailrState.isStarted) {
         badge.innerText = 'STANDBY';
         badge.style.background = '#f1f5f9';
         badge.style.color = '#475569';
-        badge.style.borderColor = '#cbd5e1';
-        panelDot.style.background = '#059669';
-        pillDot.style.background = '#059669';
         btnText.innerText = 'AUTO-APPLY NOW';
-        mainBtn.style.background = '#059669';
+        autoBtn.style.background = '#059669';
       } else if (window.__bioTailrState.isPaused) {
         badge.innerText = 'PAUSED';
         badge.style.background = '#fef3c7';
         badge.style.color = '#92400e';
-        badge.style.borderColor = '#fde68a';
-        panelDot.style.background = '#f59e0b';
-        pillDot.style.background = '#f59e0b';
         btnText.innerText = 'RESUME AUTO APPLY';
-        mainBtn.style.background = '#f59e0b';
+        autoBtn.style.background = '#f59e0b';
       } else {
         badge.innerText = 'RUNNING';
         badge.style.background = '#ecfdf5';
         badge.style.color = '#047857';
-        badge.style.borderColor = '#a7f3d0';
-        panelDot.style.background = '#10b981';
-        pillDot.style.background = '#10b981';
         btnText.innerText = 'PAUSE AUTO APPLY';
-        mainBtn.style.background = '#374151';
+        autoBtn.style.background = '#374151';
       }
     }
+    window.__bioTailrSyncUI = syncStateUI;
 
-    mainBtn.onclick = () => {
+    autoBtn.onclick = (e) => {
+      e.stopPropagation();
       if (!window.__bioTailrState.isStarted) {
-        window.__bioTailrState.isStarted = true;
-        window.__bioTailrState.isPaused = false;
-        window.__bioTailrAppendLog('START', 'Auto-Apply started by user from StandBy HUD.');
+        triggerStart(host);
       } else {
         window.__bioTailrState.isPaused = !window.__bioTailrState.isPaused;
-        window.__bioTailrAppendLog(window.__bioTailrState.isPaused ? 'PAUSE' : 'RESUME', window.__bioTailrState.isPaused ? 'Execution paused by user.' : 'Execution resumed.');
+        const isPaused = window.__bioTailrState.isPaused;
+        host.setAttribute('data-bt-paused', String(isPaused));
+        document.body.setAttribute('data-bt-paused', String(isPaused));
+        window.__bioTailrAppendLog(isPaused ? 'PAUSE' : 'RESUME', isPaused ? 'Execution paused by user.' : 'Execution resumed.');
       }
       syncStateUI();
     };
 
-    // 7. Telemetry Updates
+    // Global Hooks
     window.__bioTailrUpdateHud = (data) => {
-      const job = document.getElementById('bt-target-job');
-      const comp = document.getElementById('bt-target-company');
+      const job = host.querySelector('#bt-hud-job-title');
+      const comp = host.querySelector('#bt-hud-model-text');
+      const statusBadge = host.querySelector('#bt-hud-badge');
 
       if (job && data.jobTitle) job.innerText = data.jobTitle;
       if (comp && data.company) comp.innerText = data.company;
 
       if (data.status === 'COMPLETE') {
         window.__bioTailrState.isStarted = false;
-        badge.innerText = 'DONE';
-        badge.style.background = '#f1f5f9';
-        badge.style.color = '#374151';
+        host.removeAttribute('data-bt-started');
+        document.body.removeAttribute('data-bt-started');
+        if (statusBadge) {
+          statusBadge.innerText = 'DONE';
+          statusBadge.style.background = '#f1f5f9';
+          statusBadge.style.color = '#374151';
+        }
         btnText.innerText = 'SESSION COMPLETE';
-        mainBtn.disabled = true;
-        mainBtn.style.background = '#6b7280';
+        autoBtn.disabled = true;
+        autoBtn.style.background = '#6b7280';
       }
     };
 
     window.__bioTailrAppendLog = (tag, message) => {
-      const logStream = document.getElementById('bt-log-stream');
-      if (!logStream) return;
+      const logFeed = host.querySelector('#bt-hud-feed');
+      if (!logFeed) return;
 
       const row = document.createElement('div');
       row.style.lineHeight = '1.4';
       row.style.wordBreak = 'break-word';
 
-      let tagColor = '#059669';
-      if (/err|fail/i.test(tag)) tagColor = '#ef4444';
-      else if (/skip|warn/i.test(tag)) tagColor = '#d97706';
-      else if (/submit|success/i.test(tag)) tagColor = '#059669';
-      else if (/step|form/i.test(tag)) tagColor = '#0284c7';
-      else if (/standby/i.test(tag)) tagColor = '#94a3b8';
-
       row.innerHTML = '<span style="color:#94a3b8; font-weight:600;">[' + tag + ']</span> ' + message;
-      logStream.appendChild(row);
-      logStream.scrollTop = logStream.scrollHeight;
+      logFeed.appendChild(row);
+      logFeed.scrollTop = logFeed.scrollHeight;
     };
   })()`);
 }
@@ -615,13 +690,19 @@ async function appendHudLog(ws, tag, message) {
 
 async function isHudStarted(ws) {
   return await cdpEval(ws, `(() => {
-    return Boolean(window.__bioTailrState?.isStarted);
+    const host = document.getElementById('biotailr-agent-hud') || document.getElementById('biotailr-standby-hud');
+    const attrStarted = host?.getAttribute('data-bt-started') === 'true' || document.body.getAttribute('data-bt-started') === 'true';
+    const propStarted = Boolean(window.__bioTailrState?.isStarted);
+    return attrStarted || propStarted;
   })()`);
 }
 
 async function isHudPaused(ws) {
   return await cdpEval(ws, `(() => {
-    return Boolean(window.__bioTailrState?.isPaused);
+    const host = document.getElementById('biotailr-agent-hud') || document.getElementById('biotailr-standby-hud');
+    const attrPaused = host?.getAttribute('data-bt-paused') === 'true' || document.body.getAttribute('data-bt-paused') === 'true';
+    const propPaused = Boolean(window.__bioTailrState?.isPaused);
+    return attrPaused || propPaused;
   })()`);
 }
 
