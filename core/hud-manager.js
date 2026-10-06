@@ -1,12 +1,12 @@
 /**
  * BioTailr AI StandBy - HUD Manager
  * Injects and manages the live on-screen StandBy HUD directly inside Google Chrome via CDP.
- * Features:
- * - Fully Draggable Container (smooth viewport-bounded drag)
- * - Explicit "START AUTO APPLY" gate button (automation only starts when clicked)
- * - In-HUD Real-Time Execution Log Stream
- * - Pause / Resume controls & Session Counters
- * - Zero emojis, max 6px border-radius, clean emerald theme.
+ * Pixel-perfect implementation matching executive design (Zero emojis, max 6px radius, uniform border):
+ * - Collapsed: Floating Pill ("BioTailr AI Agent") with pulsating emerald status dot
+ * - Expanded: Panel ("BioTailr Autonomous Agent") positioned smoothly above pill
+ * - Proper Hide and Drop: Clicking pill opens/drops panel; clicking [x] or pill hides panel
+ * - Normal 1px uniform border all around (#e2e8f0) with NO colored top-border highlight
+ * - Bottom-anchored 60fps dragging all over the screen with glass overlay
  */
 
 const { cdpEval } = require('./cdp-client');
@@ -15,165 +15,193 @@ async function ensureHudInjected(ws) {
   await cdpEval(ws, `(() => {
     const existing = document.getElementById('biotailr-standby-hud');
     const savedLeft = existing ? existing.style.left : '';
-    const savedTop = existing ? existing.style.top : '';
+    const savedBottom = existing ? existing.style.bottom : '';
+    const wasOpen = existing ? (existing.querySelector('#bt-hud-panel')?.style.display !== 'none') : true;
+
     if (existing) {
       existing.remove();
     }
 
-    const hud = document.createElement('div');
-    hud.id = 'biotailr-standby-hud';
-    hud.style.cssText = \`
+    const host = document.createElement('div');
+    host.id = 'biotailr-standby-hud';
+    host.style.cssText = \`
       position: fixed;
-      top: \${savedTop || '16px'};
+      bottom: \${savedBottom || '24px'};
       left: \${savedLeft || 'auto'};
-      right: \${savedLeft ? 'auto' : '16px'};
-      width: 340px;
-      max-width: calc(100vw - 32px);
-      background: #ffffff;
-      border: 1px solid #e5e7eb;
-      border-top: 3px solid #10b981;
-      border-radius: 6px;
-      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+      right: \${savedLeft ? 'auto' : '24px'};
       z-index: 9999999;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      font-size: 13px;
-      color: #111827;
-      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       user-select: none;
+      color: #0f172a;
     \`;
 
-    hud.innerHTML = \`
-      <!-- Draggable Header -->
-      <div id="bt-hud-header" style="padding: 10px 14px; background: #f9fafb; border-bottom: 1px solid #e5e7eb; display: flex; align-items: center; justify-content: space-between; cursor: grab; user-select: none;">
-        <div style="display: flex; align-items: center; gap: 8px; pointer-events: none;">
-          <span style="display: inline-flex; align-items: center; color: #9ca3af; font-size: 14px; letter-spacing: 1px; font-weight: bold; cursor: grab; margin-right: 2px;" title="Drag StandBy HUD">⠿</span>
-          <div id="bt-status-dot" style="width: 8px; height: 8px; border-radius: 50%; background: #9ca3af; box-shadow: 0 0 0 2px rgba(156, 163, 175, 0.2);"></div>
-          <span style="font-weight: 700; color: #111827; letter-spacing: -0.2px;">BioTailr StandBy</span>
-          <span id="bt-status-pill" style="font-size: 10px; font-weight: 600; text-transform: uppercase; background: #f3f4f6; color: #4b5563; border: 1px solid #d1d5db; padding: 2px 6px; border-radius: 4px;">STANDBY</span>
+    host.innerHTML = \`
+      <!-- Dropdown / Pop-up Panel (Image 2) -->
+      <div id="bt-hud-panel" style="display: \${wasOpen ? 'flex' : 'none'}; flex-direction: column; width: 360px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; box-shadow: 0 12px 32px -4px rgba(15, 23, 42, 0.12), 0 4px 12px rgba(15, 23, 42, 0.06); overflow: hidden; margin-bottom: 10px; cursor: default;">
+        <!-- Panel Header: Normal 1px border, no top highlight -->
+        <div id="bt-panel-header" style="display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; border-radius: 6px 6px 0 0; cursor: grab; user-select: none;">
+          <div style="display: flex; align-items: center; gap: 8px; pointer-events: none;">
+            <div id="bt-panel-dot" style="width: 8px; height: 8px; background: #059669; border-radius: 50%; box-shadow: 0 0 0 2px #d1fae5; flex-shrink: 0;"></div>
+            <span style="font-size: 13px; font-weight: 700; color: #0f172a; letter-spacing: -0.2px;">BioTailr Autonomous Agent</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span id="bt-status-pill" style="font-size: 10px; font-weight: 700; padding: 3px 6px; background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.5px;">STANDBY</span>
+            <button id="bt-close-btn" style="border: none; background: transparent; cursor: pointer; color: #64748b; font-size: 16px; line-height: 1; padding: 2px 4px; border-radius: 4px; transition: color 0.15s ease;" title="Hide panel" aria-label="Close panel">&times;</button>
+          </div>
         </div>
-        <div style="display: flex; align-items: center; gap: 6px;">
-          <button id="bt-ctrl-btn" style="border: 1px solid #d1d5db; background: #ffffff; cursor: pointer; color: #374151; font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 4px; display: none;">PAUSE</button>
-          <button id="bt-min-btn" style="border: none; background: transparent; cursor: pointer; color: #6b7280; font-size: 16px; line-height: 1; padding: 2px 4px;">_</button>
+
+        <!-- Panel Body -->
+        <div id="bt-panel-body" style="padding: 14px; display: flex; flex-direction: column; gap: 10px;">
+          <!-- Target Info Box -->
+          <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 12px; display: flex; flex-direction: column; gap: 3px;">
+            <div id="bt-target-job" style="font-size: 12px; font-weight: 600; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">LinkedIn Job Search Feed</div>
+            <div style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: #059669; font-weight: 500;">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M4.93 19.07l14.14-14.14"/>
+              </svg>
+              <span id="bt-target-company" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Google Gemini Engine (Project Key)</span>
+            </div>
+          </div>
+
+          <!-- Live Event Terminal Feed -->
+          <div id="bt-log-stream" style="height: 120px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px 10px; overflow-y: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; color: #334155; display: flex; flex-direction: column; gap: 4px; line-height: 1.4; word-break: break-all;">
+            <div><span style="color: #94a3b8;">[INIT]</span> Screen Agent initialized on LinkedIn.</div>
+            <div><span style="color: #94a3b8;">[READY]</span> Autonomous perception engine ready.</div>
+          </div>
+
+          <!-- Actions Row: Start Auto-Apply + Next Job -->
+          <div style="display: flex; gap: 8px;">
+            <button id="bt-main-start-btn" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; background: #059669; border: 1px solid #047857; color: #ffffff; font-size: 12px; font-weight: 600; padding: 9px 14px; border-radius: 6px; cursor: pointer; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05); transition: all 0.15s ease;">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                <polygon points="6 4 20 12 6 20 6 4"/>
+              </svg>
+              <span id="bt-main-start-text">AUTO-APPLY NOW</span>
+            </button>
+            <button id="bt-next-btn" style="display: flex; align-items: center; justify-content: center; gap: 5px; background: #ffffff; border: 1px solid #cbd5e1; color: #0f172a; font-size: 12px; font-weight: 600; padding: 9px 12px; border-radius: 6px; cursor: pointer; transition: all 0.15s ease;" title="Next Job in search feed">
+              <span>Next Job</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M5 12h14M12 5l7 7-7 7"/>
+              </svg>
+            </button>
+          </div>
+
+          <!-- Tools Row: Download Runner -->
+          <button id="bt-dl-btn" style="display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; background: #ffffff; border: 1px solid #cbd5e1; color: #0f172a; font-size: 11px; font-weight: 600; padding: 7px 10px; border-radius: 6px; cursor: pointer; transition: all 0.15s ease;" title="Download Standalone Desktop Auto-Apply Runner (.zip)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            <span>Download Desktop Runner (ZIP)</span>
+          </button>
         </div>
       </div>
 
-      <div id="bt-hud-body" style="padding: 12px 14px; user-select: text;">
-        <!-- Primary Action / Gate Button -->
-        <button id="bt-main-start-btn" style="width: 100%; padding: 9px 12px; background: #10b981; color: #ffffff; border: none; border-radius: 6px; font-weight: 700; font-size: 12px; cursor: pointer; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); transition: background 0.15s ease;">
-          START AUTO APPLY
-        </button>
-
-        <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 11px; color: #4b5563;">
-          <span>Session Progress</span>
-          <span style="font-weight: 600; color: #059669;" id="bt-stats">Page 1 | Applied: 0</span>
-        </div>
-
-        <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 4px; padding: 8px 10px; margin-bottom: 10px; border-left: 3px solid #10b981;">
-          <div style="font-size: 10px; text-transform: uppercase; color: #6b7280; font-weight: 600;">Current Target</div>
-          <div id="bt-target-job" style="font-weight: 600; color: #111827; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">StandBy Ready</div>
-          <div id="bt-target-company" style="font-size: 11px; color: #4b5563; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Waiting to start...</div>
-        </div>
-
-        <div style="display: flex; align-items: center; justify-content: space-between; font-size: 11px; padding: 6px 8px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 4px; margin-bottom: 10px;">
-          <span style="color: #166534; font-weight: 500;">Status</span>
-          <span id="bt-status-text" style="font-weight: 600; color: #059669;">StandBy - Click Start</span>
-        </div>
-
-        <!-- In-HUD Live Event Log Box -->
-        <div>
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-            <span style="font-size: 10px; font-weight: 600; text-transform: uppercase; color: #6b7280;">Live Execution Log</span>
-            <span id="bt-log-count" style="font-size: 9px; color: #9ca3af;">1 entry</span>
-          </div>
-          <div id="bt-log-stream" style="height: 100px; max-height: 100px; overflow-y: auto; background: #111827; color: #e5e7eb; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10.5px; padding: 6px 8px; border-radius: 4px; line-height: 1.45; word-break: break-all;">
-            <div style="color: #9ca3af;">[STANDBY] Click "START AUTO APPLY" to begin.</div>
-          </div>
-        </div>
+      <!-- Collapsed / Floating Pill (Image 1) -->
+      <div id="bt-hud-pill" style="display: flex; align-items: center; gap: 8px; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px 14px; color: #0f172a; font-size: 13px; font-weight: 600; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.04); cursor: pointer; transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);">
+        <div id="bt-pill-dot" style="width: 8px; height: 8px; background: #059669; border-radius: 50%; box-shadow: 0 0 0 2px #d1fae5; flex-shrink: 0;"></div>
+        <span id="bt-pill-text">BioTailr AI Agent</span>
       </div>
     \`;
 
-    document.body.appendChild(hud);
+    document.body.appendChild(host);
 
     window.__bioTailrState = window.__bioTailrState || {
       isStarted: false,
       isPaused: false,
-      logCount: 1
+      logCount: 2
     };
 
-    // 1. Draggable implementation across the entire HUD container (smooth 60fps, no transition lag)
+    const panel = document.getElementById('bt-hud-panel');
+    const pill = document.getElementById('bt-hud-pill');
+    const closeBtn = document.getElementById('bt-close-btn');
+    const mainStartBtn = document.getElementById('bt-main-start-btn');
+    const mainStartText = document.getElementById('bt-main-start-text');
+    const statusPill = document.getElementById('bt-status-pill');
+    const panelDot = document.getElementById('bt-panel-dot');
+    const pillDot = document.getElementById('bt-pill-dot');
+
+    // 1. Hide and Drop Feature Controller
+    let isPanelOpen = wasOpen;
+
+    const togglePanel = (open) => {
+      isPanelOpen = (open !== undefined) ? open : !isPanelOpen;
+      panel.style.display = isPanelOpen ? 'flex' : 'none';
+    };
+
+    if (closeBtn) {
+      closeBtn.onclick = (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        togglePanel(false);
+      };
+    }
+
+    // 2. Smooth 60fps Bottom-Anchored Dragging (drag from header, pill, or card edge)
     let isDragging = false;
+    let didDrag = false;
     let dragStartX = 0;
     let dragStartY = 0;
-    let initialX = 0;
-    let initialY = 0;
+    let initialLeft = 0;
+    let initialBottom = 0;
     let dragOverlay = null;
 
-    hud.addEventListener('mousedown', (e) => {
-      // Ignore clicks on interactive controls, inputs, buttons, links, or the scrollable log stream
+    host.addEventListener('mousedown', (e) => {
       if (e.target.closest('button, input, textarea, select, a, #bt-log-stream, [role="button"]')) return;
-      if (e.button !== 0) return; // Only left mouse button
+      if (e.button !== 0) return;
 
-      e.preventDefault();
+      didDrag = false;
       isDragging = true;
-      hud.style.transition = 'none';
-
-      const rect = hud.getBoundingClientRect();
-      initialX = rect.left;
-      initialY = rect.top;
-
-      hud.style.left = initialX + 'px';
-      hud.style.top = initialY + 'px';
-      hud.style.right = 'auto';
-      hud.style.bottom = 'auto';
-
       dragStartX = e.clientX;
       dragStartY = e.clientY;
 
-      hud.style.cursor = 'grabbing';
-      const headerEl = document.getElementById('bt-hud-header');
-      if (headerEl) headerEl.style.cursor = 'grabbing';
+      const rect = host.getBoundingClientRect();
+      initialLeft = rect.left;
+      initialBottom = window.innerHeight - rect.bottom;
 
-      // Full-screen transparent overlay to guarantee 100% capture across iframes, ads, and rapid mouse moves
+      host.style.left = initialLeft + 'px';
+      host.style.bottom = initialBottom + 'px';
+      host.style.right = 'auto';
+      host.style.top = 'auto';
+      host.style.transition = 'none';
+
       if (!dragOverlay) {
         dragOverlay = document.createElement('div');
-        dragOverlay.id = 'bt-drag-glass-overlay';
+        dragOverlay.id = 'bt-standby-drag-overlay';
         dragOverlay.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:99999999;cursor:grabbing;user-select:none;background:transparent;';
         document.body.appendChild(dragOverlay);
       }
 
       const onMouseMove = (moveEv) => {
         if (!isDragging) return;
-        moveEv.preventDefault();
-
         const dx = moveEv.clientX - dragStartX;
         const dy = moveEv.clientY - dragStartY;
 
-        let newX = initialX + dx;
-        let newY = initialY + dy;
+        if (Math.hypot(dx, dy) > 4) {
+          didDrag = true;
+        }
 
-        // Allow dragging all over the screen, bounded safely by viewport
-        const minX = 0;
-        const maxX = Math.max(0, window.innerWidth - hud.offsetWidth);
-        const minY = 0;
-        const maxY = Math.max(0, window.innerHeight - hud.offsetHeight);
+        let newLeft = initialLeft + dx;
+        let newBottom = initialBottom - dy;
 
-        newX = Math.max(minX, Math.min(maxX, newX));
-        newY = Math.max(minY, Math.min(maxY, newY));
+        const minLeft = 8;
+        const maxLeft = Math.max(8, window.innerWidth - host.offsetWidth - 8);
+        const minBottom = 8;
+        const maxBottom = Math.max(8, window.innerHeight - host.offsetHeight - 8);
 
-        hud.style.left = newX + 'px';
-        hud.style.top = newY + 'px';
+        newLeft = Math.max(minLeft, Math.min(maxLeft, newLeft));
+        newBottom = Math.max(minBottom, Math.min(maxBottom, newBottom));
+
+        host.style.left = newLeft + 'px';
+        host.style.bottom = newBottom + 'px';
       };
 
       const onMouseUp = () => {
         isDragging = false;
-        hud.style.cursor = '';
-        if (headerEl) headerEl.style.cursor = 'grab';
-
         if (dragOverlay && dragOverlay.parentNode) {
           dragOverlay.parentNode.removeChild(dragOverlay);
           dragOverlay = null;
         }
-
         window.removeEventListener('mousemove', onMouseMove, { capture: true });
         window.removeEventListener('mouseup', onMouseUp, { capture: true });
       };
@@ -182,46 +210,45 @@ async function ensureHudInjected(ws) {
       window.addEventListener('mouseup', onMouseUp, { capture: true });
     });
 
-    // 2. Start / Pause Gate Controller
-    const mainStartBtn = document.getElementById('bt-main-start-btn');
-    const ctrlBtn = document.getElementById('bt-ctrl-btn');
-    const statusPill = document.getElementById('bt-status-pill');
-    const dot = document.getElementById('bt-status-dot');
-    const statusText = document.getElementById('bt-status-text');
+    if (pill) {
+      pill.onclick = (e) => {
+        if (didDrag) {
+          didDrag = false;
+          return;
+        }
+        togglePanel();
+      };
+    }
 
+    // 3. Automation State Syncing
     function syncStateUI() {
       if (!window.__bioTailrState.isStarted) {
         statusPill.innerText = 'STANDBY';
-        statusPill.style.background = '#f3f4f6';
-        statusPill.style.color = '#4b5563';
-        statusPill.style.borderColor = '#d1d5db';
-        dot.style.background = '#9ca3af';
-        mainStartBtn.innerText = 'START AUTO APPLY';
-        mainStartBtn.style.background = '#10b981';
-        ctrlBtn.style.display = 'none';
-        statusText.innerText = 'StandBy - Click Start';
+        statusPill.style.background = '#f1f5f9';
+        statusPill.style.color = '#475569';
+        statusPill.style.borderColor = '#cbd5e1';
+        panelDot.style.background = '#059669';
+        pillDot.style.background = '#059669';
+        mainStartText.innerText = 'AUTO-APPLY NOW';
+        mainStartBtn.style.background = '#059669';
       } else if (window.__bioTailrState.isPaused) {
         statusPill.innerText = 'PAUSED';
         statusPill.style.background = '#fef3c7';
         statusPill.style.color = '#92400e';
         statusPill.style.borderColor = '#fde68a';
-        dot.style.background = '#f59e0b';
-        mainStartBtn.innerText = 'RESUME AUTO APPLY';
+        panelDot.style.background = '#f59e0b';
+        pillDot.style.background = '#f59e0b';
+        mainStartText.innerText = 'RESUME AUTO APPLY';
         mainStartBtn.style.background = '#f59e0b';
-        ctrlBtn.style.display = 'block';
-        ctrlBtn.innerText = 'RESUME';
-        statusText.innerText = 'Paused by user';
       } else {
         statusPill.innerText = 'RUNNING';
         statusPill.style.background = '#ecfdf5';
         statusPill.style.color = '#047857';
         statusPill.style.borderColor = '#a7f3d0';
-        dot.style.background = '#10b981';
-        mainStartBtn.innerText = 'PAUSE AUTO APPLY';
+        panelDot.style.background = '#10b981';
+        pillDot.style.background = '#10b981';
+        mainStartText.innerText = 'PAUSE AUTO APPLY';
         mainStartBtn.style.background = '#374151';
-        ctrlBtn.style.display = 'block';
-        ctrlBtn.innerText = 'PAUSE';
-        statusText.innerText = 'Auto-Applying active';
       }
     }
 
@@ -239,69 +266,41 @@ async function ensureHudInjected(ws) {
       };
     }
 
-    if (ctrlBtn) {
-      ctrlBtn.onclick = () => {
-        window.__bioTailrState.isPaused = !window.__bioTailrState.isPaused;
-        syncStateUI();
-        window.__bioTailrAppendLog(window.__bioTailrState.isPaused ? 'PAUSE' : 'RESUME', window.__bioTailrState.isPaused ? 'Execution paused by user.' : 'Execution resumed.');
-      };
-    }
-
-    const minBtn = document.getElementById('bt-min-btn');
-    const body = document.getElementById('bt-hud-body');
-    if (minBtn && body) {
-      minBtn.onclick = () => {
-        const isHidden = body.style.display === 'none';
-        body.style.display = isHidden ? 'block' : 'none';
-        minBtn.innerText = isHidden ? '_' : '+';
-      };
-    }
-
-    // 3. Telemetry Updates
+    // 4. Telemetry Updates
     window.__bioTailrUpdateHud = (data) => {
-      const stats = document.getElementById('bt-stats');
       const job = document.getElementById('bt-target-job');
       const comp = document.getElementById('bt-target-company');
-      const sText = document.getElementById('bt-status-text');
 
-      if (stats && data.page !== undefined) stats.innerText = 'Page ' + data.page + ' | Applied: ' + (data.appliedCount || 0);
       if (job && data.jobTitle) job.innerText = data.jobTitle;
       if (comp && data.company) comp.innerText = data.company;
-      if (sText && data.status) sText.innerText = data.status;
 
       if (data.status === 'COMPLETE') {
         window.__bioTailrState.isStarted = false;
         statusPill.innerText = 'DONE';
-        statusPill.style.background = '#f3f4f6';
+        statusPill.style.background = '#f1f5f9';
         statusPill.style.color = '#374151';
-        dot.style.background = '#6b7280';
-        mainStartBtn.innerText = 'SESSION COMPLETE';
+        mainStartText.innerText = 'SESSION COMPLETE';
         mainStartBtn.disabled = true;
         mainStartBtn.style.background = '#6b7280';
-        ctrlBtn.style.display = 'none';
       }
     };
 
     window.__bioTailrAppendLog = (tag, message) => {
       const logStream = document.getElementById('bt-log-stream');
-      const logCountEl = document.getElementById('bt-log-count');
       if (!logStream) return;
 
-      window.__bioTailrState.logCount = (window.__bioTailrState.logCount || 0) + 1;
-      if (logCountEl) logCountEl.innerText = window.__bioTailrState.logCount + ' entries';
-
       const row = document.createElement('div');
-      row.style.marginTop = '2px';
-      const ts = new Date().toLocaleTimeString([], { hour12: false });
+      row.style.lineHeight = '1.4';
+      row.style.wordBreak = 'break-word';
 
-      let tagColor = '#10b981';
+      let tagColor = '#059669';
       if (/err|fail/i.test(tag)) tagColor = '#ef4444';
-      else if (/skip|warn/i.test(tag)) tagColor = '#f59e0b';
-      else if (/submit|success/i.test(tag)) tagColor = '#34d399';
-      else if (/step|form/i.test(tag)) tagColor = '#60a5fa';
-      else if (/standby/i.test(tag)) tagColor = '#9ca3af';
+      else if (/skip|warn/i.test(tag)) tagColor = '#d97706';
+      else if (/submit|success/i.test(tag)) tagColor = '#059669';
+      else if (/step|form/i.test(tag)) tagColor = '#0284c7';
+      else if (/standby/i.test(tag)) tagColor = '#94a3b8';
 
-      row.innerHTML = \`<span style="color:#6b7280;">[\${ts}]</span> <span style="color:\${tagColor}; font-weight:600;">[\${tag}]</span> \${message}\`;
+      row.innerHTML = \`<span style="color:#94a3b8; font-weight:600;">[\${tag}]</span> \${message}\`;
       logStream.appendChild(row);
       logStream.scrollTop = logStream.scrollHeight;
     };
