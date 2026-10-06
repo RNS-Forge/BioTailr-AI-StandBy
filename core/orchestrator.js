@@ -4,8 +4,8 @@
  * Interacts with HUD controls, stream logger, and platform adapters.
  */
 
-const { log, sleep } = require('./cdp-client');
-const { ensureHudInjected, updateHud, appendHudLog, isHudStarted, isHudPaused } = require('./hud-manager');
+const { log, sleep, cdpEval } = require('./cdp-client');
+const { ensureHudInjected, resetHudToStandby, updateHud, appendHudLog, isHudStarted, isHudPaused } = require('./hud-manager');
 
 class Orchestrator {
   constructor(ws, platform, profile) {
@@ -24,22 +24,63 @@ class Orchestrator {
     log('INIT', `Starting autonomous auto-apply orchestrator...`);
 
     await ensureHudInjected(this.ws);
+    // 1. Explicitly reset HUD to clean StandBy state so it NEVER auto-starts on its own
+    await resetHudToStandby(this.ws);
+
     await updateHud(this.ws, {
       page: 1,
       appliedCount: 0,
       jobTitle: 'Ready in StandBy',
       company: this.platform.getName(),
-      status: 'StandBy - Click Start'
+      status: 'STANDBY'
     });
 
     await appendHudLog(this.ws, 'INIT', `Attached to ${this.platform.getName()} active feed.`);
-    await appendHudLog(this.ws, 'STANDBY', 'StandBy container is draggable. Click "START AUTO APPLY" to begin.');
+    await appendHudLog(this.ws, 'STANDBY', 'StandBy container active. Click "AUTO-APPLY NOW" in HUD or press Enter in terminal to begin.');
 
-    log('STANDBY', 'StandBy HUD active in Chrome (Draggable). Awaiting user click on "START AUTO APPLY"...');
+    console.log('\n----------------------------------------------------');
+    log('STANDBY', 'StandBy HUD active in Chrome.');
+    log('STANDBY', 'Click "AUTO-APPLY NOW" in the on-screen HUD, or press [ENTER] in this terminal to start.');
+    console.log('----------------------------------------------------\n');
 
-    // Wait until the user clicks "START AUTO APPLY" in the on-screen StandBy HUD
-    while (!(await isHudStarted(this.ws))) {
-      await sleep(400);
+    // Setup terminal Enter key listener for local execution
+    let startedFromTerminal = false;
+    let terminalListener = null;
+
+    if (process.stdin.isTTY || process.stdin.readable) {
+      try {
+        process.stdin.setEncoding('utf8');
+        process.stdin.resume();
+        terminalListener = (chunk) => {
+          startedFromTerminal = true;
+          log('TERMINAL', 'User pressed ENTER in terminal. Initiating Auto-Apply...');
+        };
+        process.stdin.once('data', terminalListener);
+      } catch (err) {}
+    }
+
+    // Wait until user clicks "AUTO-APPLY NOW" in Chrome OR presses Enter in terminal
+    while (!(await isHudStarted(this.ws)) && !startedFromTerminal) {
+      await sleep(350);
+    }
+
+    if (startedFromTerminal) {
+      await this.ws && cdpEval(this.ws, `(() => {
+        window.__bioTailrState = window.__bioTailrState || {};
+        window.__bioTailrState.isStarted = true;
+        window.__bioTailrState.isPaused = false;
+        const host = document.getElementById('biotailr-agent-hud');
+        if (host) host.setAttribute('data-bt-started', 'true');
+        document.body.setAttribute('data-bt-started', 'true');
+        if (typeof window.__bioTailrSyncUI === 'function') window.__bioTailrSyncUI();
+      })()`);
+    }
+
+    if (terminalListener) {
+      try {
+        process.stdin.removeListener('data', terminalListener);
+        process.stdin.pause();
+      } catch (err) {}
     }
 
     log('START', 'User initiated Auto-Apply from StandBy HUD! Starting batch loop...');
@@ -108,95 +149,101 @@ class Orchestrator {
         continue;
       }
 
-      log('ACTION', `Clicking Apply button for "${jobInfo.title}"...`);
-      await appendHudLog(this.ws, 'APPLY', `Opening application for "${jobInfo.title}" at "${jobInfo.company}".`);
+      try {
+        log('ACTION', `Clicking Apply button for "${jobInfo.title}"...`);
+        await appendHudLog(this.ws, 'APPLY', `Opening application for "${jobInfo.title}" at "${jobInfo.company}".`);
 
-      await updateHud(this.ws, {
-        page: currentPage,
-        appliedCount: appliedJobs.length,
-        jobTitle: jobInfo.title,
-        company: jobInfo.company,
-        status: 'Opening Form'
-      });
-
-      await this.platform.clickApplyButton();
-      await sleep(1500);
-
-      let stepCount = 0;
-      let submitted = false;
-
-      while (stepCount < 60) {
-        while (await isHudPaused(this.ws)) {
-          await sleep(1000);
-        }
-
-        stepCount++;
-        await sleep(400);
-
-        const stepStatus = await this.platform.getModalStatus();
-
-        if (!stepStatus || !stepStatus.modalOpen) {
-          log('MODAL', 'Application modal closed. Verifying completion...');
-          submitted = true;
-          break;
-        }
-
-        log('STEP', `Step ${stepCount}: "${stepStatus.title || 'Form'}" | Buttons: [${(stepStatus.buttons || []).join(', ')}]`);
         await updateHud(this.ws, {
           page: currentPage,
           appliedCount: appliedJobs.length,
           jobTitle: jobInfo.title,
           company: jobInfo.company,
-          status: `Solving Step ${stepCount}`
+          status: 'Opening Form'
         });
 
-        await appendHudLog(this.ws, 'STEP', `Step ${stepCount}: ${stepStatus.title || 'Form Verification'}`);
+        await this.platform.clickApplyButton();
+        await sleep(1500);
 
-        // Solve inputs, selects, radios, checkboxes, subforms
-        await this.platform.solveCurrentStep(stepCount, stepStatus);
+        let stepCount = 0;
+        let submitted = false;
 
-        // Try submit
-        const submitClicked = await this.platform.trySubmit();
-        if (submitClicked) {
-          log('SUBMIT', 'Clicked "Submit application"!');
-          await appendHudLog(this.ws, 'SUBMIT', `Submitted application to "${jobInfo.title}"!`);
+        while (stepCount < 60) {
+          while (await isHudPaused(this.ws)) {
+            await sleep(1000);
+          }
 
+          stepCount++;
+          await sleep(400);
+
+          const stepStatus = await this.platform.getModalStatus();
+
+          if (!stepStatus || !stepStatus.modalOpen) {
+            log('MODAL', 'Application modal closed. Verifying completion...');
+            submitted = true;
+            break;
+          }
+
+          log('STEP', `Step ${stepCount}: "${stepStatus.title || 'Form'}" | Buttons: [${(stepStatus.buttons || []).join(', ')}]`);
           await updateHud(this.ws, {
             page: currentPage,
-            appliedCount: appliedJobs.length + 1,
+            appliedCount: appliedJobs.length,
             jobTitle: jobInfo.title,
             company: jobInfo.company,
-            status: 'Submitted!'
+            status: `Solving Step ${stepCount}`
           });
 
-          await sleep(1500);
-          await this.platform.dismissPostSubmit();
-          submitted = true;
-          break;
+          await appendHudLog(this.ws, 'STEP', `Step ${stepCount}: ${stepStatus.title || 'Form Verification'}`);
+
+          // Solve inputs, selects, radios, checkboxes, subforms
+          await this.platform.solveCurrentStep(stepCount, stepStatus);
+
+          // Try submit
+          const submitClicked = await this.platform.trySubmit();
+          if (submitClicked) {
+            log('SUBMIT', 'Clicked "Submit application"!');
+            await appendHudLog(this.ws, 'SUBMIT', `Submitted application to "${jobInfo.title}"!`);
+
+            await updateHud(this.ws, {
+              page: currentPage,
+              appliedCount: appliedJobs.length + 1,
+              jobTitle: jobInfo.title,
+              company: jobInfo.company,
+              status: 'Submitted!'
+            });
+
+            await sleep(1500);
+            await this.platform.dismissPostSubmit();
+            submitted = true;
+            break;
+          }
+
+          // Try advance past review/next
+          const nextClicked = await this.platform.tryAdvance();
+          if (nextClicked) {
+            log('NAV', `Advanced past "${nextClicked}" step.`);
+            await sleep(600);
+          } else {
+            await sleep(400);
+          }
         }
 
-        // Try advance past review/next
-        const nextClicked = await this.platform.tryAdvance();
-        if (nextClicked) {
-          log('NAV', `Advanced past "${nextClicked}" step.`);
-          await sleep(600);
-        } else {
-          await sleep(400);
+        if (submitted) {
+          log('SUCCESS', `Application to "${jobInfo.title}" successfully submitted!`);
+          appliedJobs.push({
+            index: jobIndex,
+            title: jobInfo.title,
+            company: jobInfo.company,
+            status: 'SUBMITTED'
+          });
         }
-      }
 
-      if (submitted) {
-        log('SUCCESS', `Application to "${jobInfo.title}" successfully submitted!`);
-        appliedJobs.push({
-          index: jobIndex,
-          title: jobInfo.title,
-          company: jobInfo.company,
-          status: 'SUBMITTED'
-        });
+        await sleep(800);
+        await this.platform.dismissPostSubmit();
+      } catch (err) {
+        log('WARN', `Error processing "${jobInfo.title}": ${err.message}. Advancing to next listing...`);
+        await appendHudLog(this.ws, 'WARN', `Skipped "${jobInfo.title}": ${err.message}`);
+        await this.platform.dismissPostSubmit();
       }
-
-      await sleep(800);
-      await this.platform.dismissPostSubmit();
 
       // Transition to next job card or page
       if (jobIndex < this.batchTarget) {

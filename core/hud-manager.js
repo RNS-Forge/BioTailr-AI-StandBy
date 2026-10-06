@@ -53,26 +53,25 @@ async function ensureHudInjected(ws) {
     let host = document.getElementById('biotailr-agent-hud');
 
     if (host) {
-      // Connect to existing HUD
+      // Connect to existing HUD and ensure click listeners are active
       const autoBtn = host.querySelector('#bt-btn-auto-apply, #bt-main-start-btn');
-      if (autoBtn && !autoBtn.__btBound) {
-        autoBtn.__btBound = true;
-        autoBtn.addEventListener('click', (e) => {
+      if (autoBtn) {
+        autoBtn.onclick = (e) => {
           e.stopPropagation();
           triggerStart(host);
-        });
+        };
       }
       const pill = host.querySelector('#bt-hud-pill, .bt-hud-pill');
-      if (pill && !pill.__btBound) {
-        pill.__btBound = true;
-        pill.addEventListener('click', (e) => {
+      if (pill) {
+        pill.onclick = (e) => {
+          e.stopPropagation();
           const panel = host.querySelector('#bt-hud-panel, .bt-hud-panel');
           if (panel && !panel.classList.contains('open')) {
             panel.classList.add('open');
-          } else if (!window.__bioTailrState.isStarted) {
+          } else if (!window.__bioTailrState || !window.__bioTailrState.isStarted) {
             triggerStart(host);
           }
-        });
+        };
       }
       return;
     }
@@ -706,8 +705,45 @@ async function isHudPaused(ws) {
   })()`);
 }
 
+async function resetHudToStandby(ws) {
+  await cdpEval(ws, `(() => {
+    window.__bioTailrState = {
+      isStarted: false,
+      isPaused: false,
+      logCount: 0
+    };
+    const host = document.getElementById('biotailr-agent-hud') || document.getElementById('biotailr-standby-hud');
+    if (host) {
+      host.removeAttribute('data-bt-started');
+      host.removeAttribute('data-bt-paused');
+      const badge = host.querySelector('#bt-hud-badge');
+      const btn = host.querySelector('#bt-btn-auto-apply, #bt-main-start-btn');
+      const btnText = host.querySelector('#bt-btn-text');
+      const pillText = host.querySelector('#bt-pill-text');
+      if (badge) {
+        badge.innerText = 'STANDBY';
+        badge.className = 'bt-hud-badge';
+        badge.style.background = '#f1f5f9';
+        badge.style.color = '#475569';
+      }
+      if (btn) {
+        btn.style.background = '#059669';
+        btn.disabled = false;
+      }
+      if (btnText) btnText.innerText = 'AUTO-APPLY NOW';
+      if (pillText) pillText.innerText = 'BioTailr AI Agent';
+    }
+    document.body.removeAttribute('data-bt-started');
+    document.body.removeAttribute('data-bt-paused');
+    if (typeof window.__bioTailrSyncUI === 'function') {
+      window.__bioTailrSyncUI();
+    }
+  })()`);
+}
+
 module.exports = {
   ensureHudInjected,
+  resetHudToStandby,
   updateHud,
   appendHudLog,
   isHudStarted,
