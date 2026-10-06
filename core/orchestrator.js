@@ -5,7 +5,7 @@
  */
 
 const { log, sleep } = require('./cdp-client');
-const { ensureHudInjected, updateHud, appendHudLog, isHudPaused } = require('./hud-manager');
+const { ensureHudInjected, updateHud, appendHudLog, isHudStarted, isHudPaused } = require('./hud-manager');
 
 class Orchestrator {
   constructor(ws, platform, profile) {
@@ -27,12 +27,22 @@ class Orchestrator {
     await updateHud(this.ws, {
       page: 1,
       appliedCount: 0,
-      jobTitle: 'Initializing runner...',
+      jobTitle: 'Ready in StandBy',
       company: this.platform.getName(),
-      status: 'Engine Ready'
+      status: 'StandBy - Click Start'
     });
 
     await appendHudLog(this.ws, 'INIT', `Attached to ${this.platform.getName()} active feed.`);
+    await appendHudLog(this.ws, 'STANDBY', 'StandBy container is draggable. Click "START AUTO APPLY" to begin.');
+
+    log('STANDBY', 'StandBy HUD active in Chrome (Draggable). Awaiting user click on "START AUTO APPLY"...');
+
+    // Wait until the user clicks "START AUTO APPLY" in the on-screen StandBy HUD
+    while (!(await isHudStarted(this.ws))) {
+      await sleep(400);
+    }
+
+    log('START', 'User initiated Auto-Apply from StandBy HUD! Starting batch loop...');
     await appendHudLog(this.ws, 'START', 'Autonomous continuous application session started.');
 
     const appliedJobs = [];
