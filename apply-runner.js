@@ -133,8 +133,12 @@ async function runAutoApply() {
     console.log(`----------------------------------------------------`);
 
     const jobInfo = await cdpEval(ws, `(() => {
-      const title = document.querySelector('.job-details-jobs-unified-top-card__job-title, h1')?.innerText?.trim();
-      const company = document.querySelector('.job-details-jobs-unified-top-card__company-name, .jobs-unified-top-card__company-name')?.innerText?.trim();
+      const title = document.querySelector('.job-details-jobs-unified-top-card__job-title, h1.job-details-jobs-unified-top-card__job-title, .jobs-search__job-details--container h1, .jobs-unified-top-card__job-title, .job-card-list__title, h1')?.innerText?.trim()
+        || document.querySelector('.jobs-search-results-list__list-item--active .job-card-list__title, .selected .job-card-list__title')?.innerText?.trim()
+        || 'Technical Opportunity';
+      const company = document.querySelector('.job-details-jobs-unified-top-card__company-name, .jobs-unified-top-card__company-name, .job-details-jobs-unified-top-card__primary-description-container a, .job-card-container__primary-description')?.innerText?.trim()
+        || document.querySelector('.jobs-search-results-list__list-item--active .job-card-container__primary-description, .selected .job-card-container__primary-description')?.innerText?.trim()
+        || 'Target Company';
       const easyBtn = Array.from(document.querySelectorAll('button')).find(b => (b.innerText || '').toLowerCase().includes('easy apply') && b.offsetWidth > 0);
       return { title, company, hasEasyApply: !!easyBtn };
     })()`);
@@ -188,7 +192,43 @@ async function runAutoApply() {
 
       log('STEP', `Step ${stepCount}: "${stepStatus.title || 'Form'}" | Action Buttons: [${stepStatus.buttons.join(', ')}]`);
 
-      // 1. Education Pruning (Strictly 1 College + 1 School)
+      // 1. Intercept "Update your profile" or intermediate confirmation dialog
+      const promptHandled = await cdpEval(ws, `(() => {
+        const dialogs = Array.from(document.querySelectorAll('dialog, [role="dialog"], .artdeco-modal'));
+        for (const d of dialogs) {
+          if (d.querySelector('.jobs-easy-apply-form-section__grouping')) continue;
+          const txt = (d.innerText || '').toLowerCase();
+          if (txt.includes('update your profile') || txt.includes('save to your profile') || txt.includes('save changes') || txt.includes('continue applying') || txt.includes('remember this')) {
+            const contBtn = Array.from(d.querySelectorAll('button')).find(b => /continue applying|continue|save and continue/i.test(b.innerText.trim()));
+            if (contBtn) { contBtn.click(); return 'clicked_continue_applying'; }
+            const notNow = Array.from(d.querySelectorAll('button')).find(b => /not now|no thanks|no|close|dismiss/i.test(b.innerText.trim()))
+              || d.querySelector('.artdeco-modal__dismiss, [data-test-modal-close-btn]');
+            if (notNow) { notNow.click(); return 'dismissed_update_profile'; }
+          }
+        }
+        return false;
+      })()`);
+
+      if (promptHandled) {
+        log('PROMPT', `Handled profile update dialog: ${promptHandled}`);
+        await sleep(350);
+      }
+
+      // Check if modal closed due to profile dialog and re-click Easy Apply if available
+      const needReopen = await cdpEval(ws, `(() => {
+        const modal = document.querySelector('dialog, [role="dialog"], .jobs-easy-apply-modal, .artdeco-modal');
+        if (!modal) {
+          const btn = Array.from(document.querySelectorAll('button')).find(b => (b.innerText || '').toLowerCase().includes('easy apply') && b.offsetWidth > 0);
+          if (btn) { btn.click(); return true; }
+        }
+        return false;
+      })()`);
+      if (needReopen) {
+        log('ACTION', 'Re-opened Easy Apply modal after profile prompt.');
+        await sleep(1000);
+      }
+
+      // 2. Education Pruning (Strictly 1 College + 1 School)
       if (stepStatus.isEducation) {
         const pruneResult = await cdpEval(ws, `(() => {
           const modal = document.querySelector('dialog, [role="dialog"], .jobs-easy-apply-modal, .artdeco-modal');
@@ -224,7 +264,7 @@ async function runAutoApply() {
         }
       }
 
-      // 2. Candidate Context & Reasoning Value Setter
+      // 3. Candidate Context & Reasoning Value Setter with Combobox Selection
       await cdpEval(ws, `(() => {
         const modal = document.querySelector('dialog, [role="dialog"], .jobs-easy-apply-modal, .artdeco-modal');
         if (!modal) return;
@@ -245,15 +285,27 @@ async function runAutoApply() {
         });
 
         rawInputs.forEach(el => {
-          const pContainer = el.closest('.fb-dash-form-element, .jobs-easy-apply-form-section__grouping, fieldset') || el.parentElement;
-          const labelText = ((pContainer ? pContainer.innerText : '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' + el.id).replace(/\\n+/g, ' ').toLowerCase();
+          const labelEl = el.id ? document.querySelector('label[for="' + el.id + '"]') : null;
+          const pContainer = el.closest('.fb-dash-form-element, .jobs-easy-apply-form-section__grouping, [data-test-single-typeahead-entity-form-component], div[class*="form-component"], div[class*="form-element"], fieldset, li') || el.parentElement;
+          const labelText = ((labelEl ? labelEl.innerText : '') + ' ' + (pContainer ? pContainer.innerText : '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('placeholder') || '') + ' ' + (el.name || '') + ' ' + el.id).replace(/\\s+/g, ' ').toLowerCase();
 
-          if (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && ['text', 'tel', 'email', 'url', 'number', ''].includes(el.type))) {
+          const isCombobox = el.getAttribute('role') === 'combobox' || el.getAttribute('aria-autocomplete') === 'list' || el.classList.contains('search-basic-typeahead') || Boolean(el.closest('.search-basic-typeahead, .search-vertical-typeahead'));
+
+          if (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && ['text', 'tel', 'email', 'url', 'number', 'search', ''].includes(el.type))) {
             const isExp = /years.*experience|experience.*years|how\\s*many\\s*years/i.test(labelText) && !/salary|ctc|notice|grad/i.test(labelText);
             const isTech = /resume|python|sql|full\\s*stack|ai|engineer|developer|software|backend|react/i.test(labelText);
+            const isLocation = /city|location|address|where|metro|town|area|place|state|country/i.test(labelText) || (isCombobox && !/company|title|school|college|degree|skill|role|name/i.test(labelText));
 
             if (isExp) {
               setVal(el, isTech ? '2' : '1');
+            } else if (isLocation) {
+              setVal(el, 'Bengaluru, Karnataka, India');
+            } else if (/first\\s*name|^fname$/i.test(labelText)) {
+              setVal(el, 'Sanjay');
+            } else if (/last\\s*name|^lname$/i.test(labelText)) {
+              setVal(el, 'N');
+            } else if (/full\\s*name|your\\s*name|candidate\\s*name/i.test(labelText)) {
+              setVal(el, 'Sanjay N');
             } else if (labelText.includes('headline')) {
               setVal(el, 'Generative AI & Full Stack Engineer');
             } else if (labelText.includes('income expectation')) {
@@ -270,8 +322,6 @@ async function runAutoApply() {
               setVal(el, '800,000 INR (8 LPA)');
             } else if (labelText.includes('expected ctc') || labelText.includes('expected salary')) {
               setVal(el, '1,200,000 INR (12 LPA)');
-            } else if (labelText.includes('city') || labelText.includes('location') || labelText.includes('where')) {
-              setVal(el, 'Coimbatore, Tamil Nadu, India');
             } else if (labelText.includes('linkedin')) {
               setVal(el, 'https://www.linkedin.com/in/sanjay--n');
             } else if (labelText.includes('github')) {
@@ -281,7 +331,15 @@ async function runAutoApply() {
             } else if (labelText.includes('summary') || labelText.includes('cover letter') || labelText.includes('tinkering') || labelText.includes('about')) {
               setVal(el, '2+ years of hands-on experience developing scalable full-stack software, agentic AI pipelines, microservices, and modern web architectures at Axodian. Deeply proficient in Python, FastAPI, React, SQL, and LLM APIs.');
             } else if (!el.value) {
-              setVal(el, el.tagName === 'TEXTAREA' ? 'Experienced in AI engineering, Python, React, and scalable backend services.' : 'Sanjay N');
+              if (/years|number|count|period/i.test(labelText)) {
+                setVal(el, '1');
+              } else if (el.tagName === 'TEXTAREA') {
+                setVal(el, 'Experienced in AI engineering, Python, React, and scalable backend services.');
+              } else if (isCombobox) {
+                setVal(el, 'Bengaluru, Karnataka, India');
+              } else {
+                setVal(el, 'Experienced Software Engineer');
+              }
             }
           } else if (el.tagName === 'SELECT') {
             const opts = Array.from(el.options);
@@ -319,6 +377,24 @@ async function runAutoApply() {
             }
           }
         });
+
+        // Select any open typeahead dropdown option (e.g. city, location, institution)
+        const openOptions = Array.from(document.querySelectorAll([
+          '[role="listbox"] [role="option"]',
+          'div[role="option"]',
+          '.basic-typeahead__selectable-list li',
+          '.search-basic-typeahead__results li',
+          'ul[id*="typeahead"] li',
+          'div[id*="typeahead"] li',
+          '[role="listbox"] li',
+          '[role="listbox"] > div'
+        ].join(', '))).filter(o => o.offsetWidth > 0 || o.offsetHeight > 0);
+
+        if (openOptions.length > 0) {
+          const opt = openOptions[0];
+          opt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+          opt.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+          opt.click();
       })()`);
 
       // 3. Navigation Check: Submit Application

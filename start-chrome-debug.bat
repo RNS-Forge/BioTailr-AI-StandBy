@@ -18,11 +18,16 @@ if %CHROME_BIN%=="" (
     exit /b 1
 )
 
+set EXTENSION_DIR="C:\Temp Files\My Projects\BioTailr.ai\BioTailr-AI-Extension"
+
 echo Found Chrome: %CHROME_BIN%
-echo Opening Chrome on port 9222 with dedicated debugging profile...
+echo BioTailr Extension Path: %EXTENSION_DIR%
+echo Opening Chrome on port 9222 with BioTailr Extension automatically loaded...
 echo.
 echo NOTE: Keep this Chrome window open, log into LinkedIn, and navigate to your jobs search page.
+echo The BioTailr StandBy HUD will automatically appear on your LinkedIn screen.
 echo Then run "start-runner.bat".
 echo.
 
-start "" %CHROME_BIN% --remote-debugging-port=9222 --user-data-dir="%USERPROFILE%\.biotailr-chrome-profile" "https://www.linkedin.com/jobs/"
+start "" %CHROME_BIN% --remote-debugging-port=9222 --user-data-dir="%USERPROFILE%\.biotailr-chrome-profile" --load-extension=%EXTENSION_DIR% "https://www.linkedin.com/jobs/"
+
