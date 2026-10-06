@@ -232,20 +232,60 @@ async function solveFormFields(ws, cdpEval, profile) {
     const elements = Array.from(modal.querySelectorAll('input:not([type="hidden"]), textarea, select'));
 
     elements.forEach(el => {
-      let p = el.parentElement;
+      // 1. Direct label association
       let labelText = '';
-      for (let i = 0; i < 6; i++) {
-        if (!p || p === modal) break;
-        const lbl = p.querySelector('label, [class*="label"], legend');
-        if (lbl && lbl.innerText.trim()) { labelText = lbl.innerText.toLowerCase(); break; }
-        p = p.parentElement;
+      if (el.labels && el.labels.length > 0 && el.labels[0].innerText.trim()) {
+        labelText = el.labels[0].innerText.toLowerCase();
+      } else if (el.id) {
+        const directLbl = modal.querySelector(`label[for="${CSS.escape ? CSS.escape(el.id) : el.id}"]`);
+        if (directLbl && directLbl.innerText.trim()) {
+          labelText = directLbl.innerText.toLowerCase();
+        }
       }
-      if (!labelText) labelText = (el.getAttribute('aria-label') || el.name || el.id || el.placeholder || '').toLowerCase();
+
+      // 2. aria-labelledby
+      if (!labelText && el.getAttribute('aria-labelledby')) {
+        const idList = el.getAttribute('aria-labelledby').split(' ');
+        const texts = idList.map(id => document.getElementById(id)?.innerText?.trim()).filter(Boolean);
+        if (texts.length > 0) labelText = texts.join(' ').toLowerCase();
+      }
+
+      // 3. aria-label or placeholder
+      if (!labelText) {
+        labelText = (el.getAttribute('aria-label') || el.placeholder || '').toLowerCase();
+      }
+
+      // 4. Ancestor search - strictly ignoring labels belonging to OTHER inputs (lbl.htmlFor && lbl.htmlFor !== el.id)
+      if (!labelText) {
+        let p = el.parentElement;
+        for (let i = 0; i < 4; i++) {
+          if (!p || p === modal) break;
+          const candidateLabels = Array.from(p.querySelectorAll('label, legend, [class*="label"]'));
+          const myLabel = candidateLabels.find(lbl => {
+            if (lbl.tagName === 'LABEL' && lbl.htmlFor && el.id && lbl.htmlFor !== el.id) return false;
+            return Boolean(lbl.innerText && lbl.innerText.trim());
+          });
+          if (myLabel && myLabel.innerText.trim()) {
+            labelText = myLabel.innerText.toLowerCase();
+            break;
+          }
+          p = p.parentElement;
+        }
+      }
+
+      if (!labelText) {
+        labelText = (el.name || el.id || '').toLowerCase();
+      }
 
       const isCombobox = el.getAttribute('role') === 'combobox'
         || el.classList.contains('search-basic-typeahead__input')
         || el.classList.contains('basic-typeahead__input')
         || Boolean(el.closest('[role="combobox"]'));
+
+      const isTypeaheadLocation = el.getAttribute('data-testid') === 'typeahead-input'
+        || /city|location|where/i.test(el.placeholder || '')
+        || (el.getAttribute('aria-autocomplete') === 'list' && /city|location|residence|where/i.test(labelText + ' ' + (el.placeholder || '')))
+        || labelText.includes('city') || labelText.includes('location') || labelText.includes('residence') || labelText.includes('where');
 
       const isTextarea = el.tagName === 'TEXTAREA';
       const isInput = el.tagName === 'INPUT';
@@ -256,7 +296,7 @@ async function solveFormFields(ws, cdpEval, profile) {
         || /years?|experience|duration|months?|days?|notice|salary|ctc|compensation|fixed|variable|lpa|lakh|phone|mobile|postal|zip|pin\s*code|percentage|gpa|cgpa|scale|rate|amount|number|count|quantity/i.test(labelText);
 
       if (isInput && (el.type === 'text' || !el.type || el.type === 'number' || el.type === 'tel' || el.type === 'email')) {
-        const isCityOrLocation = labelText.includes('city') || labelText.includes('location') || labelText.includes('residence') || labelText.includes('where') || labelText.includes('address') || isCombobox;
+        const isCityOrLocation = isTypeaheadLocation || isCombobox || labelText.includes('city') || labelText.includes('location') || labelText.includes('residence') || labelText.includes('where') || labelText.includes('address');
 
         if (isCityOrLocation) {
           const fullLocationStr = 'Coimbatore, Tamil Nadu, India';
@@ -291,8 +331,10 @@ async function solveFormFields(ws, cdpEval, profile) {
           const sanitizedDigits = val.replace(/\D/g, '') || '2';
           setVal(el, sanitizedDigits);
         } else {
-          // Clean text input
-          if (labelText.includes('first name') || labelText.includes('given name')) {
+          // Clean text input (strictly guard so location/city inputs are NEVER set with candidate name!)
+          if (isCityOrLocation || isTypeaheadLocation || el.getAttribute('data-testid') === 'typeahead-input' || /city|location/i.test(el.placeholder || '')) {
+            setVal(el, 'Coimbatore, Tamil Nadu, India');
+          } else if (labelText.includes('first name') || labelText.includes('given name')) {
             setVal(el, prof.personal?.firstName || 'Sanjay');
           } else if (labelText.includes('last name') || labelText.includes('family name') || labelText.includes('surname')) {
             setVal(el, prof.personal?.lastName || 'N');
@@ -461,7 +503,9 @@ async function solveFormFields(ws, cdpEval, profile) {
         setVal(el, digits);
       } else {
         // Text field error: replace any invalid alphanumeric strings with valid label answers
-        if (el.tagName === 'TEXTAREA') {
+        if (/city|location|where|residence/i.test(labelText) || el.getAttribute('data-testid') === 'typeahead-input' || /city|location/i.test(el.placeholder || '')) {
+          setVal(el, 'Coimbatore, Tamil Nadu, India');
+        } else if (el.tagName === 'TEXTAREA') {
           setVal(el, 'Experienced Full Stack & AI Engineer with 2+ years developing scalable applications in Python, React, and generative AI.');
         } else {
           setVal(el, 'Full Stack & AI Engineer');
@@ -839,6 +883,88 @@ async function discardIncompleteModal(ws, cdpEval) {
   return false;
 }
 
+async function solveLocationTypeahead(ws, cdpEval, targetCity = 'Coimbatore') {
+  const locInput = await cdpEval(ws, `(() => {
+    const modal = document.querySelector('dialog, [role="dialog"], .jobs-easy-apply-modal, .artdeco-modal');
+    if (!modal) return { found: false };
+    const ti = modal.querySelector('input[data-testid="typeahead-input"], input[placeholder*="city" i], input[placeholder*="location" i]');
+    if (!ti) return { found: false };
+
+    const current = (ti.value || '').trim();
+    // If already properly filled with Coimbatore, no need to retype
+    if (/coimbatore/i.test(current) && current.includes('Tamil Nadu')) {
+      return { found: true, alreadyFilled: true };
+    }
+
+    const r = ti.getBoundingClientRect();
+    ti.focus();
+    ti.select();
+    return {
+      found: true,
+      alreadyFilled: false,
+      x: Math.round(r.left + r.width / 2),
+      y: Math.round(r.top + r.height / 2),
+      currentVal: current
+    };
+  })()`);
+
+  if (!locInput || !locInput.found || locInput.alreadyFilled) {
+    return false;
+  }
+
+  // Clear previous text (e.g. if name was typed previously)
+  ws.send(JSON.stringify({
+    id: Math.floor(Math.random() * 1000000),
+    method: 'Input.dispatchKeyEvent',
+    params: { type: 'rawKeyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 }
+  }));
+  ws.send(JSON.stringify({
+    id: Math.floor(Math.random() * 1000000),
+    method: 'Input.dispatchKeyEvent',
+    params: { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 }
+  }));
+  await new Promise(r => setTimeout(r, 80));
+
+  // Type target city using CDP insertText to trigger LinkedIn search
+  ws.send(JSON.stringify({
+    id: Math.floor(Math.random() * 1000000),
+    method: 'Input.insertText',
+    params: { text: targetCity }
+  }));
+
+  // Wait 700ms for LinkedIn search results dropdown to populate
+  await new Promise(r => setTimeout(r, 700));
+
+  // Select the Coimbatore, Tamil Nadu, India option
+  const selected = await cdpEval(ws, `(() => {
+    const options = Array.from(document.querySelectorAll([
+      '[role="listbox"] [role="option"]',
+      'div[role="option"]',
+      '.basic-typeahead__selectable-list li',
+      '.search-basic-typeahead__results li',
+      'ul[id*="typeahead"] li',
+      'div[id*="typeahead"] li',
+      '[role="listbox"] li'
+    ].join(', '))).filter(o => o.offsetWidth > 0 || o.offsetHeight > 0);
+
+    if (options.length === 0) return { selected: false };
+
+    const coimbatoreFull = options.find(o => /coimbatore.*tamil\s*nadu/i.test(o.innerText || ''));
+    const targetOpt = coimbatoreFull || options.find(o => /coimbatore/i.test(o.innerText || '')) || options[0];
+
+    if (targetOpt) {
+      targetOpt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      targetOpt.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+      targetOpt.click();
+      return { selected: true, text: targetOpt.innerText.trim() };
+    }
+    return { selected: false };
+  })()`);
+
+  await new Promise(r => setTimeout(r, 300));
+  return Boolean(selected?.selected);
+}
+
 module.exports = {
   getLinkedInModalStatus,
   handleRemoveConfirmationDialog,
@@ -846,6 +972,7 @@ module.exports = {
   handleSafetyReminder,
   pruneEducation,
   solveFormFields,
+  solveLocationTypeahead,
   trySubmitLinkedInModal,
   tryAdvanceLinkedInModal,
   dismissPostSubmitDialogs,
