@@ -14,7 +14,8 @@ const {
   solveFormFields,
   trySubmitLinkedInModal,
   tryAdvanceLinkedInModal,
-  dismissPostSubmitDialogs
+  dismissPostSubmitDialogs,
+  discardIncompleteModal
 } = require('./modal-solver');
 
 class LinkedInPlatform extends BasePlatform {
@@ -77,6 +78,10 @@ class LinkedInPlatform extends BasePlatform {
 
   async dismissPostSubmit() {
     return await dismissPostSubmitDialogs(this.ws, this.cdpEval);
+  }
+
+  async discardIncompleteModal() {
+    return await discardIncompleteModal(this.ws, this.cdpEval);
   }
 
   async selectNextJob(visitedKeys) {

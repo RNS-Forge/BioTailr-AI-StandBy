@@ -29,5 +29,5 @@ echo The BioTailr StandBy HUD will automatically appear on your LinkedIn screen.
 echo Then run "start-runner.bat".
 echo.
 
-start "" %CHROME_BIN% --remote-debugging-port=9222 --user-data-dir="%USERPROFILE%\.biotailr-chrome-profile" --load-extension=%EXTENSION_DIR% "https://www.linkedin.com/jobs/"
+start "" %CHROME_BIN% --remote-debugging-port=9222 --user-data-dir="%USERPROFILE%\.biotailr-chrome-profile" --load-extension=%EXTENSION_DIR% --window-size=1400,900 "https://www.linkedin.com/jobs/"
 

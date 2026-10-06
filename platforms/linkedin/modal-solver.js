@@ -345,32 +345,95 @@ async function solveFormFields(ws, cdpEval, profile) {
 }
 
 async function trySubmitLinkedInModal(ws, cdpEval) {
-  return await cdpEval(ws, `(() => {
+  // Step 1: Attempt click on submit button inside modal
+  const submitInfo = await cdpEval(ws, `(() => {
     const modal = document.querySelector('dialog, [role="dialog"], .jobs-easy-apply-modal, .artdeco-modal');
-    if (!modal) return false;
+    if (!modal) return { found: false, reason: 'no_modal' };
 
-    // Check if there are uncorrected errors blocking submission
+    // Check if there are active validation errors blocking submission
     const hasActiveErrors = Array.from(modal.querySelectorAll('.artdeco-inline-feedback--error')).some(e => e.offsetWidth > 0);
-    if (hasActiveErrors) return false;
+    if (hasActiveErrors) return { found: false, reason: 'active_validation_errors' };
 
     const submitBtn = Array.from(modal.querySelectorAll('button')).find(b => {
       const t = b.innerText.trim().toLowerCase();
       return (t === 'submit application' || t === 'submit') && b.offsetWidth > 0;
     });
 
-    if (submitBtn) {
-      const scrollContainers = [
-        modal.querySelector('.jobs-easy-apply-modal__content'),
-        modal.querySelector('.artdeco-modal__content'),
-        modal
-      ];
-      scrollContainers.forEach(sc => { if (sc) sc.scrollTop = sc.scrollHeight; });
-      submitBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
-      submitBtn.click();
-      return true;
-    }
-    return false;
+    if (!submitBtn) return { found: false, reason: 'no_submit_btn' };
+
+    const scrollContainers = [
+      modal.querySelector('.jobs-easy-apply-modal__content'),
+      modal.querySelector('.artdeco-modal__content'),
+      modal
+    ];
+    scrollContainers.forEach(sc => { if (sc) sc.scrollTop = sc.scrollHeight; });
+    submitBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
+
+    // Handle any consent or acknowledge checkboxes on review step
+    const reviewCheckboxes = Array.from(modal.querySelectorAll('input[type="checkbox"]')).filter(c => !c.checked && c.offsetWidth > 0);
+    reviewCheckboxes.forEach(cb => {
+      const lbl = (cb.closest('label')?.innerText || '').toLowerCase();
+      if (/terms|acknowledge|certify|consent|agree/i.test(lbl)) {
+        cb.click();
+        cb.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+
+    const rect = submitBtn.getBoundingClientRect();
+    submitBtn.click();
+    return {
+      found: true,
+      clicked: true,
+      x: Math.round(rect.x + rect.width / 2),
+      y: Math.round(rect.y + rect.height / 2)
+    };
   })()`);
+
+  if (!submitInfo || !submitInfo.clicked) {
+    return false;
+  }
+
+  // Step 2: Verify that LinkedIn accepted the submission
+  // Either modal is closed, or confirmation screen is shown ("Your application was sent", etc.)
+  let verified = false;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    await new Promise(r => setTimeout(r, 600));
+
+    const checkState = await cdpEval(ws, `(() => {
+      const modal = document.querySelector('dialog, [role="dialog"], .jobs-easy-apply-modal, .artdeco-modal');
+      if (!modal) return { status: 'MODAL_CLOSED' };
+
+      const txt = (modal.innerText || '').toLowerCase();
+      const isSent = txt.includes('application was sent')
+        || txt.includes('application sent')
+        || txt.includes('your application was submitted')
+        || txt.includes('next best action')
+        || txt.includes('turn your resume into a profile');
+
+      if (isSent) return { status: 'CONFIRMATION_SHOWN' };
+
+      const submitBtn = Array.from(modal.querySelectorAll('button')).find(b => {
+        const t = b.innerText.trim().toLowerCase();
+        return (t === 'submit application' || t === 'submit') && b.offsetWidth > 0;
+      });
+
+      if (submitBtn) return { status: 'SUBMIT_STILL_PRESENT' };
+
+      return { status: 'PENDING' };
+    })()`);
+
+    if (checkState?.status === 'MODAL_CLOSED' || checkState?.status === 'CONFIRMATION_SHOWN') {
+      verified = true;
+      break;
+    }
+
+    if (checkState?.status === 'SUBMIT_STILL_PRESENT' && attempt >= 3) {
+      // If submit button is still visible, the synthetic click may not have triggered LinkedIn's action
+      break;
+    }
+  }
+
+  return verified;
 }
 
 async function tryAdvanceLinkedInModal(ws, cdpEval) {
@@ -390,11 +453,52 @@ async function tryAdvanceLinkedInModal(ws, cdpEval) {
 
 async function dismissPostSubmitDialogs(ws, cdpEval) {
   return await cdpEval(ws, `(() => {
+    // 1. Check for "Not now" button on the post-submit prompt
+    const notNowBtn = Array.from(document.querySelectorAll('button')).find(b => /not now/i.test(b.innerText.trim()) && b.offsetWidth > 0);
+    if (notNowBtn) {
+      notNowBtn.click();
+      return 'dismissed_not_now';
+    }
+
+    // 2. Check for standard dismissal buttons
     for (let d = 0; d < 3; d++) {
       const dismissBtn = document.querySelector('.artdeco-modal__dismiss, [data-test-modal-close-btn], button[aria-label="Dismiss"], button[aria-label="Done"]')
         || Array.from(document.querySelectorAll('button')).find(b => b.offsetWidth > 0 && /^(not now|dismiss|close|done)$/i.test(b.innerText.trim()));
-      if (dismissBtn) dismissBtn.click();
+      if (dismissBtn) {
+        dismissBtn.click();
+        const discardBtn = document.querySelector('[data-control-name="discard_application_confirm_btn"], button[data-test-dialog-primary-btn]')
+          || Array.from(document.querySelectorAll('button')).find(b => /discard/i.test(b.innerText.trim()) && b.offsetWidth > 0);
+        if (discardBtn) discardBtn.click();
+      }
     }
+  })()`);
+}
+
+async function discardIncompleteModal(ws, cdpEval) {
+  return await cdpEval(ws, `(() => {
+    const modal = document.querySelector('dialog, [role="dialog"], .artdeco-modal');
+    if (!modal) return false;
+
+    // Check if it's the post-submit "turn resume into profile" modal
+    const notNowBtn = Array.from(document.querySelectorAll('button')).find(b => /not now/i.test(b.innerText.trim()) && b.offsetWidth > 0);
+    if (notNowBtn) {
+      notNowBtn.click();
+      return true;
+    }
+
+    // Dismiss the open modal
+    const dismissBtn = modal.querySelector('.artdeco-modal__dismiss, [data-test-modal-close-btn], button[aria-label="Dismiss"]')
+      || document.querySelector('.artdeco-modal__dismiss, button[aria-label="Dismiss"]');
+    if (dismissBtn) {
+      dismissBtn.click();
+      setTimeout(() => {
+        const discardBtn = document.querySelector('[data-control-name="discard_application_confirm_btn"], button[data-test-dialog-primary-btn]')
+          || Array.from(document.querySelectorAll('button')).find(b => /discard/i.test(b.innerText.trim()) && b.offsetWidth > 0);
+        if (discardBtn) discardBtn.click();
+      }, 350);
+      return true;
+    }
+    return false;
   })()`);
 }
 
@@ -405,5 +509,7 @@ module.exports = {
   solveFormFields,
   trySubmitLinkedInModal,
   tryAdvanceLinkedInModal,
-  dismissPostSubmitDialogs
+  dismissPostSubmitDialogs,
+  discardIncompleteModal
 };
+

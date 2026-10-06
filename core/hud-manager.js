@@ -36,6 +36,9 @@ async function ensureHudInjected(ws) {
       if (host) {
         host.setAttribute('data-bt-started', 'true');
         host.setAttribute('data-bt-paused', 'false');
+        // Collapse panel to sleek pill so modals and action buttons are unobstructed
+        const p = host.querySelector('#bt-hud-panel, .bt-hud-panel');
+        if (p) p.classList.remove('open');
       }
       document.body.setAttribute('data-bt-started', 'true');
       document.body.setAttribute('data-bt-paused', 'false');
@@ -86,7 +89,7 @@ async function ensureHudInjected(ws) {
     host.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
     host.style.userSelect = 'none';
     host.style.color = '#0f172a';
-    host.style.pointerEvents = 'auto';
+    host.style.pointerEvents = 'none';
 
     const style = document.createElement('style');
     style.textContent = \`

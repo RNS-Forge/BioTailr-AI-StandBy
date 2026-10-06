@@ -70,7 +70,11 @@ class Orchestrator {
         window.__bioTailrState.isStarted = true;
         window.__bioTailrState.isPaused = false;
         const host = document.getElementById('biotailr-agent-hud');
-        if (host) host.setAttribute('data-bt-started', 'true');
+        if (host) {
+          host.setAttribute('data-bt-started', 'true');
+          const p = host.querySelector('#bt-hud-panel, .bt-hud-panel');
+          if (p) p.classList.remove('open');
+        }
         document.body.setAttribute('data-bt-started', 'true');
         if (typeof window.__bioTailrSyncUI === 'function') window.__bioTailrSyncUI();
       })()`);
@@ -235,6 +239,12 @@ class Orchestrator {
             company: jobInfo.company,
             status: 'SUBMITTED'
           });
+        } else {
+          log('WARN', `Could not finish submission for "${jobInfo.title}". Discarding draft to free screen...`);
+          await appendHudLog(this.ws, 'WARN', `Discarded incomplete draft for "${jobInfo.title}".`);
+          if (this.platform.discardIncompleteModal) {
+            await this.platform.discardIncompleteModal();
+          }
         }
 
         await sleep(800);
@@ -242,6 +252,9 @@ class Orchestrator {
       } catch (err) {
         log('WARN', `Error processing "${jobInfo.title}": ${err.message}. Advancing to next listing...`);
         await appendHudLog(this.ws, 'WARN', `Skipped "${jobInfo.title}": ${err.message}`);
+        if (this.platform.discardIncompleteModal) {
+          await this.platform.discardIncompleteModal();
+        }
         await this.platform.dismissPostSubmit();
       }
 
