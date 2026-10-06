@@ -237,7 +237,7 @@ async function solveFormFields(ws, cdpEval, profile) {
       if (el.labels && el.labels.length > 0 && el.labels[0].innerText.trim()) {
         labelText = el.labels[0].innerText.toLowerCase();
       } else if (el.id) {
-        const directLbl = modal.querySelector(`label[for="${CSS.escape ? CSS.escape(el.id) : el.id}"]`);
+        const directLbl = modal.querySelector('label[for="' + (window.CSS && window.CSS.escape ? window.CSS.escape(el.id) : el.id) + '"]');
         if (directLbl && directLbl.innerText.trim()) {
           labelText = directLbl.innerText.toLowerCase();
         }
