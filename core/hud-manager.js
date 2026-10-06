@@ -1,7 +1,8 @@
 /**
  * BioTailr AI StandBy - HUD Manager
  * Injects and manages the live on-screen StandBy HUD directly inside Google Chrome via CDP.
- * Pixel-perfect implementation matching executive design (Zero emojis, max 6px radius, uniform border):
+ * Built with pure DOM Nodes to guarantee 100% CSP and Trusted Types compliance on LinkedIn.
+ * Features:
  * - Collapsed: Floating Pill ("BioTailr AI Agent") with pulsating emerald status dot
  * - Expanded: Panel ("BioTailr Autonomous Agent") positioned smoothly above pill
  * - Proper Hide and Drop: Clicking pill opens/drops panel; clicking [x] or pill hides panel
@@ -13,10 +14,14 @@ const { cdpEval } = require('./cdp-client');
 
 async function ensureHudInjected(ws) {
   await cdpEval(ws, `(() => {
+    // Remove any existing HUD instances to avoid duplicates
+    const extHud = document.getElementById('biotailr-agent-hud');
+    if (extHud) extHud.remove();
+
     const existing = document.getElementById('biotailr-standby-hud');
-    const savedLeft = existing ? existing.style.left : '';
-    const savedBottom = existing ? existing.style.bottom : '';
-    const wasOpen = existing ? (existing.querySelector('#bt-hud-panel')?.style.display !== 'none') : true;
+    const savedLeft = (existing && existing.style.left && existing.style.left !== 'auto') ? existing.style.left : '';
+    const savedBottom = (existing && existing.style.bottom && existing.style.bottom !== 'auto') ? existing.style.bottom : '24px';
+    const wasClosed = existing ? !existing.querySelector('.bt-hud-panel')?.classList.contains('open') : false;
 
     if (existing) {
       existing.remove();
@@ -24,86 +29,371 @@ async function ensureHudInjected(ws) {
 
     const host = document.createElement('div');
     host.id = 'biotailr-standby-hud';
-    host.style.cssText = \`
-      position: fixed;
-      bottom: \${savedBottom || '24px'};
-      left: \${savedLeft || 'auto'};
-      right: \${savedLeft ? 'auto' : '24px'};
-      z-index: 9999999;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      user-select: none;
-      color: #0f172a;
+    host.style.position = 'fixed';
+    host.style.bottom = savedBottom;
+    if (savedLeft) {
+      host.style.left = savedLeft;
+      host.style.right = 'auto';
+    } else {
+      host.style.right = '24px';
+      host.style.left = 'auto';
+    }
+    host.style.zIndex = '9999999';
+    host.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
+    host.style.userSelect = 'none';
+    host.style.color = '#0f172a';
+
+    // 1. Inject Stylesheet via Pure DOM Node
+    const style = document.createElement('style');
+    style.textContent = \`
+      #biotailr-standby-hud * {
+        box-sizing: border-box;
+      }
+      .bt-hud-pill {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: #ffffff;
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+        padding: 8px 14px;
+        color: #0f172a;
+        font-size: 13px;
+        font-weight: 600;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.04);
+        cursor: pointer;
+        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      .bt-hud-pill:hover {
+        border-color: #059669;
+        color: #059669;
+        box-shadow: 0 6px 16px rgba(5, 150, 105, 0.15);
+        transform: translateY(-1px);
+      }
+      .bt-pulse-dot {
+        width: 8px;
+        height: 8px;
+        background: #059669;
+        border-radius: 50%;
+        box-shadow: 0 0 0 2px #d1fae5;
+        flex-shrink: 0;
+        transition: all 0.2s ease;
+      }
+      .bt-hud-panel {
+        display: none;
+        flex-direction: column;
+        width: 360px;
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 6px;
+        box-shadow: 0 12px 32px -4px rgba(15, 23, 42, 0.12), 0 4px 12px rgba(15, 23, 42, 0.06);
+        overflow: hidden;
+        margin-bottom: 10px;
+        cursor: default;
+      }
+      .bt-hud-panel.open {
+        display: flex !important;
+      }
+      .bt-hud-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 14px;
+        background: #f8fafc;
+        border-bottom: 1px solid #e2e8f0;
+        border-radius: 6px 6px 0 0;
+        cursor: grab;
+        user-select: none;
+      }
+      .bt-hud-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        font-weight: 700;
+        color: #0f172a;
+        letter-spacing: -0.2px;
+      }
+      .bt-hud-badge {
+        font-size: 10px;
+        font-weight: 700;
+        padding: 3px 6px;
+        background: #f1f5f9;
+        color: #475569;
+        border: 1px solid #cbd5e1;
+        border-radius: 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .bt-hud-close {
+        background: transparent;
+        border: none;
+        color: #64748b;
+        cursor: pointer;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 16px;
+        line-height: 1;
+      }
+      .bt-hud-close:hover {
+        color: #0f172a;
+      }
+      .bt-hud-body {
+        padding: 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .bt-hud-info {
+        background: #f8fafc;
+        padding: 10px 12px;
+        border-radius: 6px;
+        border: 1px solid #e2e8f0;
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+      }
+      .bt-hud-job-title {
+        font-size: 12px;
+        font-weight: 600;
+        color: #0f172a;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .bt-hud-model {
+        font-size: 11px;
+        color: #059669;
+        font-weight: 500;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .bt-hud-feed {
+        height: 120px;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 6px;
+        padding: 8px 10px;
+        overflow-y: auto;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 11px;
+        color: #334155;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        line-height: 1.4;
+        word-break: break-all;
+      }
+      .bt-btn-primary {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        background: #059669;
+        border: 1px solid #047857;
+        color: #ffffff;
+        font-size: 12px;
+        font-weight: 600;
+        padding: 9px 14px;
+        border-radius: 6px;
+        cursor: pointer;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+        transition: all 0.15s ease;
+      }
+      .bt-btn-primary:hover {
+        background: #047857;
+      }
+      .bt-btn-secondary {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 5px;
+        background: #ffffff;
+        border: 1px solid #cbd5e1;
+        color: #0f172a;
+        font-size: 12px;
+        font-weight: 600;
+        padding: 9px 12px;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+      .bt-btn-dl {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        width: 100%;
+        background: #ffffff;
+        border: 1px solid #cbd5e1;
+        color: #0f172a;
+        font-size: 11px;
+        font-weight: 600;
+        padding: 7px 10px;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
     \`;
+    host.appendChild(style);
 
-    host.innerHTML = \`
-      <!-- Dropdown / Pop-up Panel (Image 2) -->
-      <div id="bt-hud-panel" style="display: \${wasOpen ? 'flex' : 'none'}; flex-direction: column; width: 360px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; box-shadow: 0 12px 32px -4px rgba(15, 23, 42, 0.12), 0 4px 12px rgba(15, 23, 42, 0.06); overflow: hidden; margin-bottom: 10px; cursor: default;">
-        <!-- Panel Header: Normal 1px border, no top highlight -->
-        <div id="bt-panel-header" style="display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; border-radius: 6px 6px 0 0; cursor: grab; user-select: none;">
-          <div style="display: flex; align-items: center; gap: 8px; pointer-events: none;">
-            <div id="bt-panel-dot" style="width: 8px; height: 8px; background: #059669; border-radius: 50%; box-shadow: 0 0 0 2px #d1fae5; flex-shrink: 0;"></div>
-            <span style="font-size: 13px; font-weight: 700; color: #0f172a; letter-spacing: -0.2px;">BioTailr Autonomous Agent</span>
-          </div>
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span id="bt-status-pill" style="font-size: 10px; font-weight: 700; padding: 3px 6px; background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.5px;">STANDBY</span>
-            <button id="bt-close-btn" style="border: none; background: transparent; cursor: pointer; color: #64748b; font-size: 16px; line-height: 1; padding: 2px 4px; border-radius: 4px; transition: color 0.15s ease;" title="Hide panel" aria-label="Close panel">&times;</button>
-          </div>
-        </div>
+    // Helper: SVG Builder
+    const makeSvg = (w, h, vb, inner) => {
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('width', String(w));
+      svg.setAttribute('height', String(h));
+      svg.setAttribute('viewBox', vb);
+      svg.setAttribute('fill', 'none');
+      svg.setAttribute('stroke', 'currentColor');
+      svg.setAttribute('stroke-width', '2');
+      svg.setAttribute('stroke-linecap', 'round');
+      svg.setAttribute('stroke-linejoin', 'round');
+      svg.innerHTML = inner;
+      return svg;
+    };
 
-        <!-- Panel Body -->
-        <div id="bt-panel-body" style="padding: 14px; display: flex; flex-direction: column; gap: 10px;">
-          <!-- Target Info Box -->
-          <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 12px; display: flex; flex-direction: column; gap: 3px;">
-            <div id="bt-target-job" style="font-size: 12px; font-weight: 600; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">LinkedIn Job Search Feed</div>
-            <div style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: #059669; font-weight: 500;">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M4.93 19.07l14.14-14.14"/>
-              </svg>
-              <span id="bt-target-company" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Google Gemini Engine (Project Key)</span>
-            </div>
-          </div>
+    // 2. Build Panel (Expanded State)
+    const panel = document.createElement('div');
+    panel.className = 'bt-hud-panel' + (wasClosed ? '' : ' open');
+    panel.id = 'bt-hud-panel';
 
-          <!-- Live Event Terminal Feed -->
-          <div id="bt-log-stream" style="height: 120px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px 10px; overflow-y: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; color: #334155; display: flex; flex-direction: column; gap: 4px; line-height: 1.4; word-break: break-all;">
-            <div><span style="color: #94a3b8;">[INIT]</span> Screen Agent initialized on LinkedIn.</div>
-            <div><span style="color: #94a3b8;">[READY]</span> Autonomous perception engine ready.</div>
-          </div>
+    // Header
+    const header = document.createElement('div');
+    header.className = 'bt-hud-header';
+    header.id = 'bt-panel-header';
 
-          <!-- Actions Row: Start Auto-Apply + Next Job -->
-          <div style="display: flex; gap: 8px;">
-            <button id="bt-main-start-btn" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; background: #059669; border: 1px solid #047857; color: #ffffff; font-size: 12px; font-weight: 600; padding: 9px 14px; border-radius: 6px; cursor: pointer; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05); transition: all 0.15s ease;">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-                <polygon points="6 4 20 12 6 20 6 4"/>
-              </svg>
-              <span id="bt-main-start-text">AUTO-APPLY NOW</span>
-            </button>
-            <button id="bt-next-btn" style="display: flex; align-items: center; justify-content: center; gap: 5px; background: #ffffff; border: 1px solid #cbd5e1; color: #0f172a; font-size: 12px; font-weight: 600; padding: 9px 12px; border-radius: 6px; cursor: pointer; transition: all 0.15s ease;" title="Next Job in search feed">
-              <span>Next Job</span>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M5 12h14M12 5l7 7-7 7"/>
-              </svg>
-            </button>
-          </div>
+    const titleBox = document.createElement('div');
+    titleBox.className = 'bt-hud-title';
+    const panelDot = document.createElement('span');
+    panelDot.className = 'bt-pulse-dot';
+    panelDot.id = 'bt-panel-dot';
+    const titleText = document.createElement('span');
+    titleText.textContent = 'BioTailr Autonomous Agent';
+    titleBox.appendChild(panelDot);
+    titleBox.appendChild(titleText);
 
-          <!-- Tools Row: Download Runner -->
-          <button id="bt-dl-btn" style="display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; background: #ffffff; border: 1px solid #cbd5e1; color: #0f172a; font-size: 11px; font-weight: 600; padding: 7px 10px; border-radius: 6px; cursor: pointer; transition: all 0.15s ease;" title="Download Standalone Desktop Auto-Apply Runner (.zip)">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-              <polyline points="7 10 12 15 17 10"></polyline>
-              <line x1="12" y1="15" x2="12" y2="3"></line>
-            </svg>
-            <span>Download Desktop Runner (ZIP)</span>
-          </button>
-        </div>
-      </div>
+    const rightBox = document.createElement('div');
+    rightBox.style.display = 'flex';
+    rightBox.style.alignItems = 'center';
+    rightBox.style.gap = '8px';
 
-      <!-- Collapsed / Floating Pill (Image 1) -->
-      <div id="bt-hud-pill" style="display: flex; align-items: center; gap: 8px; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px 14px; color: #0f172a; font-size: 13px; font-weight: 600; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.04); cursor: pointer; transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);">
-        <div id="bt-pill-dot" style="width: 8px; height: 8px; background: #059669; border-radius: 50%; box-shadow: 0 0 0 2px #d1fae5; flex-shrink: 0;"></div>
-        <span id="bt-pill-text">BioTailr AI Agent</span>
-      </div>
-    \`;
+    const badge = document.createElement('span');
+    badge.className = 'bt-hud-badge';
+    badge.id = 'bt-status-pill';
+    badge.textContent = 'STANDBY';
 
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'bt-hud-close';
+    closeBtn.id = 'bt-close-btn';
+    closeBtn.setAttribute('aria-label', 'Close panel');
+    closeBtn.textContent = '×';
+
+    rightBox.appendChild(badge);
+    rightBox.appendChild(closeBtn);
+
+    header.appendChild(titleBox);
+    header.appendChild(rightBox);
+
+    // Body
+    const body = document.createElement('div');
+    body.className = 'bt-hud-body';
+
+    // Target Box
+    const info = document.createElement('div');
+    info.className = 'bt-hud-info';
+    const jobTitle = document.createElement('div');
+    jobTitle.className = 'bt-hud-job-title';
+    jobTitle.id = 'bt-target-job';
+    jobTitle.textContent = 'LinkedIn Job Search Feed';
+
+    const model = document.createElement('div');
+    model.className = 'bt-hud-model';
+    const sparkleSvg = makeSvg(12, 12, '0 0 24 24', '<path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M4.93 19.07l14.14-14.14"/>');
+    const compText = document.createElement('span');
+    compText.id = 'bt-target-company';
+    compText.textContent = 'Google Gemini Engine (Project Key)';
+    model.appendChild(sparkleSvg);
+    model.appendChild(compText);
+
+    info.appendChild(jobTitle);
+    info.appendChild(model);
+
+    // Feed Box
+    const feed = document.createElement('div');
+    feed.className = 'bt-hud-feed';
+    feed.id = 'bt-log-stream';
+
+    const line1 = document.createElement('div');
+    line1.innerHTML = '<span style="color:#94a3b8;">[INIT]</span> Screen Agent initialized on LinkedIn.';
+    const line2 = document.createElement('div');
+    line2.innerHTML = '<span style="color:#94a3b8;">[READY]</span> Autonomous perception engine ready.';
+    feed.appendChild(line1);
+    feed.appendChild(line2);
+
+    // Actions
+    const actions = document.createElement('div');
+    actions.style.display = 'flex';
+    actions.style.gap = '8px';
+
+    const mainBtn = document.createElement('button');
+    mainBtn.className = 'bt-btn-primary';
+    mainBtn.id = 'bt-main-start-btn';
+    const playSvg = makeSvg(12, 12, '0 0 24 24', '<polygon points="6 4 20 12 6 20 6 4"/>');
+    playSvg.setAttribute('fill', 'currentColor');
+    playSvg.setAttribute('stroke', 'none');
+    const btnText = document.createElement('span');
+    btnText.id = 'bt-main-start-text';
+    btnText.textContent = 'AUTO-APPLY NOW';
+    mainBtn.appendChild(playSvg);
+    mainBtn.appendChild(btnText);
+
+    const nextBtn = document.createElement('button');
+    nextBtn.className = 'bt-btn-secondary';
+    nextBtn.id = 'bt-next-btn';
+    nextBtn.setAttribute('title', 'Skip to next job');
+    const nextText = document.createElement('span');
+    nextText.textContent = 'Next Job';
+    const nextSvg = makeSvg(12, 12, '0 0 24 24', '<path d="M5 12h14M12 5l7 7-7 7"/>');
+    nextBtn.appendChild(nextText);
+    nextBtn.appendChild(nextSvg);
+
+    actions.appendChild(mainBtn);
+    actions.appendChild(nextBtn);
+
+    // Download Button
+    const dlBtn = document.createElement('button');
+    dlBtn.className = 'bt-btn-dl';
+    dlBtn.id = 'bt-dl-btn';
+    const dlSvg = makeSvg(12, 12, '0 0 24 24', '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line>');
+    const dlText = document.createElement('span');
+    dlText.textContent = 'Download Desktop Runner (ZIP)';
+    dlBtn.appendChild(dlSvg);
+    dlBtn.appendChild(dlText);
+
+    body.appendChild(info);
+    body.appendChild(feed);
+    body.appendChild(actions);
+    body.appendChild(dlBtn);
+
+    panel.appendChild(header);
+    panel.appendChild(body);
+
+    // 3. Build Pill (Collapsed State)
+    const pill = document.createElement('div');
+    pill.className = 'bt-hud-pill';
+    pill.id = 'bt-hud-pill';
+    const pillDot = document.createElement('span');
+    pillDot.className = 'bt-pulse-dot';
+    pillDot.id = 'bt-pill-dot';
+    const pillText = document.createElement('span');
+    pillText.textContent = 'BioTailr AI Agent';
+    pill.appendChild(pillDot);
+    pill.appendChild(pillText);
+
+    host.appendChild(panel);
+    host.appendChild(pill);
     document.body.appendChild(host);
 
     window.__bioTailrState = window.__bioTailrState || {
@@ -112,34 +402,35 @@ async function ensureHudInjected(ws) {
       logCount: 2
     };
 
-    const panel = document.getElementById('bt-hud-panel');
-    const pill = document.getElementById('bt-hud-pill');
-    const closeBtn = document.getElementById('bt-close-btn');
-    const mainStartBtn = document.getElementById('bt-main-start-btn');
-    const mainStartText = document.getElementById('bt-main-start-text');
-    const statusPill = document.getElementById('bt-status-pill');
-    const panelDot = document.getElementById('bt-panel-dot');
-    const pillDot = document.getElementById('bt-pill-dot');
-
-    // 1. Hide and Drop Feature Controller
-    let isPanelOpen = wasOpen;
+    // 4. Hide and Drop Feature Controller
+    let didDrag = false;
 
     const togglePanel = (open) => {
-      isPanelOpen = (open !== undefined) ? open : !isPanelOpen;
-      panel.style.display = isPanelOpen ? 'flex' : 'none';
+      if (open === undefined) {
+        panel.classList.toggle('open');
+      } else if (open) {
+        panel.classList.add('open');
+      } else {
+        panel.classList.remove('open');
+      }
     };
 
-    if (closeBtn) {
-      closeBtn.onclick = (e) => {
-        e.stopPropagation();
-        e.preventDefault();
-        togglePanel(false);
-      };
-    }
+    closeBtn.onclick = (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      togglePanel(false);
+    };
 
-    // 2. Smooth 60fps Bottom-Anchored Dragging (drag from header, pill, or card edge)
+    pill.onclick = (e) => {
+      if (didDrag) {
+        didDrag = false;
+        return;
+      }
+      togglePanel();
+    };
+
+    // 5. Smooth 60fps Bottom-Anchored Dragging
     let isDragging = false;
-    let didDrag = false;
     let dragStartX = 0;
     let dragStartY = 0;
     let initialLeft = 0;
@@ -147,7 +438,7 @@ async function ensureHudInjected(ws) {
     let dragOverlay = null;
 
     host.addEventListener('mousedown', (e) => {
-      if (e.target.closest('button, input, textarea, select, a, #bt-log-stream, [role="button"]')) return;
+      if (e.target.closest('button, input, textarea, select, a, .bt-hud-feed, [role="button"]')) return;
       if (e.button !== 0) return;
 
       didDrag = false;
@@ -168,7 +459,15 @@ async function ensureHudInjected(ws) {
       if (!dragOverlay) {
         dragOverlay = document.createElement('div');
         dragOverlay.id = 'bt-standby-drag-overlay';
-        dragOverlay.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:99999999;cursor:grabbing;user-select:none;background:transparent;';
+        dragOverlay.style.position = 'fixed';
+        dragOverlay.style.top = '0';
+        dragOverlay.style.left = '0';
+        dragOverlay.style.width = '100vw';
+        dragOverlay.style.height = '100vh';
+        dragOverlay.style.zIndex = '99999999';
+        dragOverlay.style.cursor = 'grabbing';
+        dragOverlay.style.userSelect = 'none';
+        dragOverlay.style.background = 'transparent';
         document.body.appendChild(dragOverlay);
       }
 
@@ -210,63 +509,51 @@ async function ensureHudInjected(ws) {
       window.addEventListener('mouseup', onMouseUp, { capture: true });
     });
 
-    if (pill) {
-      pill.onclick = (e) => {
-        if (didDrag) {
-          didDrag = false;
-          return;
-        }
-        togglePanel();
-      };
-    }
-
-    // 3. Automation State Syncing
+    // 6. Automation State Syncing
     function syncStateUI() {
       if (!window.__bioTailrState.isStarted) {
-        statusPill.innerText = 'STANDBY';
-        statusPill.style.background = '#f1f5f9';
-        statusPill.style.color = '#475569';
-        statusPill.style.borderColor = '#cbd5e1';
+        badge.innerText = 'STANDBY';
+        badge.style.background = '#f1f5f9';
+        badge.style.color = '#475569';
+        badge.style.borderColor = '#cbd5e1';
         panelDot.style.background = '#059669';
         pillDot.style.background = '#059669';
-        mainStartText.innerText = 'AUTO-APPLY NOW';
-        mainStartBtn.style.background = '#059669';
+        btnText.innerText = 'AUTO-APPLY NOW';
+        mainBtn.style.background = '#059669';
       } else if (window.__bioTailrState.isPaused) {
-        statusPill.innerText = 'PAUSED';
-        statusPill.style.background = '#fef3c7';
-        statusPill.style.color = '#92400e';
-        statusPill.style.borderColor = '#fde68a';
+        badge.innerText = 'PAUSED';
+        badge.style.background = '#fef3c7';
+        badge.style.color = '#92400e';
+        badge.style.borderColor = '#fde68a';
         panelDot.style.background = '#f59e0b';
         pillDot.style.background = '#f59e0b';
-        mainStartText.innerText = 'RESUME AUTO APPLY';
-        mainStartBtn.style.background = '#f59e0b';
+        btnText.innerText = 'RESUME AUTO APPLY';
+        mainBtn.style.background = '#f59e0b';
       } else {
-        statusPill.innerText = 'RUNNING';
-        statusPill.style.background = '#ecfdf5';
-        statusPill.style.color = '#047857';
-        statusPill.style.borderColor = '#a7f3d0';
+        badge.innerText = 'RUNNING';
+        badge.style.background = '#ecfdf5';
+        badge.style.color = '#047857';
+        badge.style.borderColor = '#a7f3d0';
         panelDot.style.background = '#10b981';
         pillDot.style.background = '#10b981';
-        mainStartText.innerText = 'PAUSE AUTO APPLY';
-        mainStartBtn.style.background = '#374151';
+        btnText.innerText = 'PAUSE AUTO APPLY';
+        mainBtn.style.background = '#374151';
       }
     }
 
-    if (mainStartBtn) {
-      mainStartBtn.onclick = () => {
-        if (!window.__bioTailrState.isStarted) {
-          window.__bioTailrState.isStarted = true;
-          window.__bioTailrState.isPaused = false;
-          window.__bioTailrAppendLog('START', 'Auto-Apply started by user from StandBy HUD.');
-        } else {
-          window.__bioTailrState.isPaused = !window.__bioTailrState.isPaused;
-          window.__bioTailrAppendLog(window.__bioTailrState.isPaused ? 'PAUSE' : 'RESUME', window.__bioTailrState.isPaused ? 'Execution paused by user.' : 'Execution resumed.');
-        }
-        syncStateUI();
-      };
-    }
+    mainBtn.onclick = () => {
+      if (!window.__bioTailrState.isStarted) {
+        window.__bioTailrState.isStarted = true;
+        window.__bioTailrState.isPaused = false;
+        window.__bioTailrAppendLog('START', 'Auto-Apply started by user from StandBy HUD.');
+      } else {
+        window.__bioTailrState.isPaused = !window.__bioTailrState.isPaused;
+        window.__bioTailrAppendLog(window.__bioTailrState.isPaused ? 'PAUSE' : 'RESUME', window.__bioTailrState.isPaused ? 'Execution paused by user.' : 'Execution resumed.');
+      }
+      syncStateUI();
+    };
 
-    // 4. Telemetry Updates
+    // 7. Telemetry Updates
     window.__bioTailrUpdateHud = (data) => {
       const job = document.getElementById('bt-target-job');
       const comp = document.getElementById('bt-target-company');
@@ -276,12 +563,12 @@ async function ensureHudInjected(ws) {
 
       if (data.status === 'COMPLETE') {
         window.__bioTailrState.isStarted = false;
-        statusPill.innerText = 'DONE';
-        statusPill.style.background = '#f1f5f9';
-        statusPill.style.color = '#374151';
-        mainStartText.innerText = 'SESSION COMPLETE';
-        mainStartBtn.disabled = true;
-        mainStartBtn.style.background = '#6b7280';
+        badge.innerText = 'DONE';
+        badge.style.background = '#f1f5f9';
+        badge.style.color = '#374151';
+        btnText.innerText = 'SESSION COMPLETE';
+        mainBtn.disabled = true;
+        mainBtn.style.background = '#6b7280';
       }
     };
 
@@ -300,7 +587,7 @@ async function ensureHudInjected(ws) {
       else if (/step|form/i.test(tag)) tagColor = '#0284c7';
       else if (/standby/i.test(tag)) tagColor = '#94a3b8';
 
-      row.innerHTML = \`<span style="color:#94a3b8; font-weight:600;">[\${tag}]</span> \${message}\`;
+      row.innerHTML = '<span style="color:#94a3b8; font-weight:600;">[' + tag + ']</span> ' + message;
       logStream.appendChild(row);
       logStream.scrollTop = logStream.scrollHeight;
     };
