@@ -1,0 +1,40 @@
+{
+  "personal": {
+    "firstName": "Sanjay",
+    "lastName": "N",
+    "fullName": "Sanjay N",
+    "email": "2005sanjaynrs@gmail.com",
+    "phone": "+91 9361599018",
+    "city": "Coimbatore",
+    "state": "Tamil Nadu",
+    "country": "India",
+    "linkedinUrl": "https://www.linkedin.com/in/sanjay--n",
+    "githubUrl": "https://github.com/RNS-Forge",
+    "portfolioUrl": "https://rns-forge.github.io/RNS_Professional_Profile/"
+  },
+  "workAuth": {
+    "authorizedInCountry": "Yes",
+    "needSponsorship": "No",
+    "currentVisaStatus": "Citizen"
+  },
+  "experience": {
+    "totalYears": 2,
+    "noticePeriodDays": 15,
+    "currentTitle": "Software Development Engineer",
+    "currentCompany": "Axodian",
+    "currentSalary": "800,000 INR (8 LPA)",
+    "expectedSalary": "1,200,000 INR (12 LPA)"
+  },
+  "education": {
+    "degree": "Bachelor of Technology - BTech",
+    "fieldOfStudy": "Computer Science and Engineering",
+    "institution": "Anna University / SNS College of Technology",
+    "gradYear": "2026"
+  },
+  "settings": {
+    "batchTarget": 5,
+    "cdpPort": 9222,
+    "scrollDelayMs": 350,
+    "actionDelayMs": 1000
+  }
+}
