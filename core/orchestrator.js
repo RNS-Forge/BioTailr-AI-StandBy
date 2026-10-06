@@ -1,11 +1,12 @@
 /**
  * BioTailr AI StandBy - Batch Orchestrator
  * Coordinates continuous, multi-page automated applications across platforms.
- * Interacts with HUD controls, stream logger, and platform adapters.
+ * Immediately starts from local execution, injects the StandBy HUD,
+ * and maintains real-time counts and failed job listings.
  */
 
 const { log, sleep, cdpEval } = require('./cdp-client');
-const { ensureHudInjected, resetHudToStandby, updateHud, appendHudLog, isHudStarted, isHudPaused } = require('./hud-manager');
+const { ensureHudInjected, resetHudToStandby, updateHud } = require('./hud-manager');
 
 class Orchestrator {
   constructor(ws, platform, profile) {
@@ -23,87 +24,31 @@ class Orchestrator {
     console.log('====================================================');
     log('INIT', `Starting autonomous auto-apply orchestrator...`);
 
+    // Inject StandBy metrics HUD in Chrome
     await ensureHudInjected(this.ws);
-    // 1. Explicitly reset HUD to clean StandBy state so it NEVER auto-starts on its own
     await resetHudToStandby(this.ws);
+
+    const appliedJobs = [];
+    const failedJobs = [];
+    const visitedJobKeys = new Set();
 
     await updateHud(this.ws, {
       page: 1,
       appliedCount: 0,
-      jobTitle: 'Ready in StandBy',
+      failedCount: 0,
+      failedJobs: [],
+      jobTitle: 'Initializing...',
       company: this.platform.getName(),
-      status: 'STANDBY'
+      status: 'ACTIVE'
     });
 
-    await appendHudLog(this.ws, 'INIT', `Attached to ${this.platform.getName()} active feed.`);
-    await appendHudLog(this.ws, 'STANDBY', 'StandBy container active. Click "AUTO-APPLY NOW" in HUD or press Enter in terminal to begin.');
-
-    console.log('\n----------------------------------------------------');
-    log('STANDBY', 'StandBy HUD active in Chrome.');
-    log('STANDBY', 'Click "AUTO-APPLY NOW" in the on-screen HUD, or press [ENTER] in this terminal to start.');
-    console.log('----------------------------------------------------\n');
-
-    // Setup terminal Enter key listener for local execution
-    let startedFromTerminal = false;
-    let terminalListener = null;
-
-    if (process.stdin.isTTY || process.stdin.readable) {
-      try {
-        process.stdin.setEncoding('utf8');
-        process.stdin.resume();
-        terminalListener = (chunk) => {
-          startedFromTerminal = true;
-          log('TERMINAL', 'User pressed ENTER in terminal. Initiating Auto-Apply...');
-        };
-        process.stdin.once('data', terminalListener);
-      } catch (err) {}
-    }
-
-    // Wait until user clicks "AUTO-APPLY NOW" in Chrome OR presses Enter in terminal
-    while (!(await isHudStarted(this.ws)) && !startedFromTerminal) {
-      await sleep(350);
-    }
-
-    if (startedFromTerminal) {
-      await this.ws && cdpEval(this.ws, `(() => {
-        window.__bioTailrState = window.__bioTailrState || {};
-        window.__bioTailrState.isStarted = true;
-        window.__bioTailrState.isPaused = false;
-        const host = document.getElementById('biotailr-agent-hud');
-        if (host) {
-          host.setAttribute('data-bt-started', 'true');
-          const p = host.querySelector('#bt-hud-panel, .bt-hud-panel');
-          if (p) p.classList.remove('open');
-        }
-        document.body.setAttribute('data-bt-started', 'true');
-        if (typeof window.__bioTailrSyncUI === 'function') window.__bioTailrSyncUI();
-      })()`);
-    }
-
-    if (terminalListener) {
-      try {
-        process.stdin.removeListener('data', terminalListener);
-        process.stdin.pause();
-      } catch (err) {}
-    }
-
-    log('START', 'User initiated Auto-Apply from StandBy HUD! Starting batch loop...');
-    await appendHudLog(this.ws, 'START', 'Autonomous continuous application session started.');
-
-    const appliedJobs = [];
-    const visitedJobKeys = new Set();
+    log('START', `Autonomous continuous apply active. Initiating applications in Chrome...`);
 
     let jobIndex = 0;
     let currentPage = 1;
     let hasMoreJobs = true;
 
     while (jobIndex < this.batchTarget && hasMoreJobs) {
-      // 1. Check for Pause state from on-screen HUD
-      while (await isHudPaused(this.ws)) {
-        log('PAUSE', 'Automation paused from StandBy HUD. Waiting for user to click RESUME...');
-        await sleep(1000);
-      }
-
       jobIndex++;
       console.log(`\n----------------------------------------------------`);
       const targetLabel = this.batchTarget === Infinity ? 'Unlimited' : String(this.batchTarget);
@@ -118,18 +63,34 @@ class Orchestrator {
 
       const currentKey = (jobInfo.title + '::' + jobInfo.company).toLowerCase();
       visitedJobKeys.add(currentKey);
+      if (jobInfo.title) visitedJobKeys.add(jobInfo.title.toLowerCase());
 
       await updateHud(this.ws, {
         page: currentPage,
         appliedCount: appliedJobs.length,
+        failedCount: failedJobs.length,
+        failedJobs: failedJobs,
         jobTitle: jobInfo.title,
         company: jobInfo.company,
         status: jobInfo.hasEasyApply ? 'Applying' : 'Skipping (No Apply Button)'
       });
 
       if (!jobInfo.hasEasyApply) {
-        log('SKIP', 'Easy Apply button not present on current job card. Moving to next card in search feed...');
-        await appendHudLog(this.ws, 'SKIP', `No Easy Apply on "${jobInfo.title}" - advancing.`);
+        log('SKIP', 'Easy Apply button not present on current job card. Recording and moving to next listing...');
+        failedJobs.push({
+          title: jobInfo.title || 'Untitled Role',
+          company: jobInfo.company || 'Unknown Company'
+        });
+
+        await updateHud(this.ws, {
+          page: currentPage,
+          appliedCount: appliedJobs.length,
+          failedCount: failedJobs.length,
+          failedJobs: failedJobs,
+          jobTitle: jobInfo.title,
+          company: jobInfo.company,
+          status: 'Skipped'
+        });
 
         let nextJob = await this.platform.selectNextJob(visitedJobKeys);
         if (!nextJob || !nextJob.found) {
@@ -142,7 +103,6 @@ class Orchestrator {
           if (paged.success) {
             currentPage++;
             log('PAGINATION', `Advanced to Search Results Page ${currentPage}. Loading fresh jobs...`);
-            await appendHudLog(this.ws, 'PAGE', `Advanced to Page ${currentPage}. Loading fresh jobs...`);
             await sleep(3500);
             await ensureHudInjected(this.ws);
           } else {
@@ -155,14 +115,15 @@ class Orchestrator {
 
       try {
         log('ACTION', `Clicking Apply button for "${jobInfo.title}"...`);
-        await appendHudLog(this.ws, 'APPLY', `Opening application for "${jobInfo.title}" at "${jobInfo.company}".`);
 
         await updateHud(this.ws, {
           page: currentPage,
           appliedCount: appliedJobs.length,
+          failedCount: failedJobs.length,
+          failedJobs: failedJobs,
           jobTitle: jobInfo.title,
           company: jobInfo.company,
-          status: 'Opening Form'
+          status: 'Solving Application'
         });
 
         await this.platform.clickApplyButton();
@@ -171,11 +132,7 @@ class Orchestrator {
         let stepCount = 0;
         let submitted = false;
 
-        while (stepCount < 60) {
-          while (await isHudPaused(this.ws)) {
-            await sleep(1000);
-          }
-
+        while (stepCount < 40) {
           stepCount++;
           await sleep(400);
 
@@ -188,15 +145,6 @@ class Orchestrator {
           }
 
           log('STEP', `Step ${stepCount}: "${stepStatus.title || 'Form'}" | Buttons: [${(stepStatus.buttons || []).join(', ')}]`);
-          await updateHud(this.ws, {
-            page: currentPage,
-            appliedCount: appliedJobs.length,
-            jobTitle: jobInfo.title,
-            company: jobInfo.company,
-            status: `Solving Step ${stepCount}`
-          });
-
-          await appendHudLog(this.ws, 'STEP', `Step ${stepCount}: ${stepStatus.title || 'Form Verification'}`);
 
           // Solve inputs, selects, radios, checkboxes, subforms
           await this.platform.solveCurrentStep(stepCount, stepStatus);
@@ -205,15 +153,6 @@ class Orchestrator {
           const submitClicked = await this.platform.trySubmit();
           if (submitClicked) {
             log('SUBMIT', 'Clicked "Submit application"!');
-            await appendHudLog(this.ws, 'SUBMIT', `Submitted application to "${jobInfo.title}"!`);
-
-            await updateHud(this.ws, {
-              page: currentPage,
-              appliedCount: appliedJobs.length + 1,
-              jobTitle: jobInfo.title,
-              company: jobInfo.company,
-              status: 'Submitted!'
-            });
 
             await sleep(1500);
             await this.platform.dismissPostSubmit();
@@ -241,17 +180,33 @@ class Orchestrator {
           });
         } else {
           log('WARN', `Could not finish submission for "${jobInfo.title}". Discarding draft to free screen...`);
-          await appendHudLog(this.ws, 'WARN', `Discarded incomplete draft for "${jobInfo.title}".`);
+          failedJobs.push({
+            title: jobInfo.title || 'Untitled Role',
+            company: jobInfo.company || 'Unknown Company'
+          });
           if (this.platform.discardIncompleteModal) {
             await this.platform.discardIncompleteModal();
           }
         }
 
+        await updateHud(this.ws, {
+          page: currentPage,
+          appliedCount: appliedJobs.length,
+          failedCount: failedJobs.length,
+          failedJobs: failedJobs,
+          jobTitle: jobInfo.title,
+          company: jobInfo.company,
+          status: submitted ? 'Applied' : 'Discarded'
+        });
+
         await sleep(800);
         await this.platform.dismissPostSubmit();
       } catch (err) {
         log('WARN', `Error processing "${jobInfo.title}": ${err.message}. Advancing to next listing...`);
-        await appendHudLog(this.ws, 'WARN', `Skipped "${jobInfo.title}": ${err.message}`);
+        failedJobs.push({
+          title: jobInfo.title || 'Untitled Role',
+          company: jobInfo.company || 'Unknown Company'
+        });
         if (this.platform.discardIncompleteModal) {
           await this.platform.discardIncompleteModal();
         }
@@ -264,6 +219,8 @@ class Orchestrator {
         await updateHud(this.ws, {
           page: currentPage,
           appliedCount: appliedJobs.length,
+          failedCount: failedJobs.length,
+          failedJobs: failedJobs,
           jobTitle: 'Finding next job...',
           company: 'Listings Feed',
           status: 'Scanning Cards'
@@ -273,24 +230,13 @@ class Orchestrator {
 
         if (!nextJob || !nextJob.found) {
           log('FEED', 'End of visible cards on page. Scrolling search feed down to load more...');
-          await appendHudLog(this.ws, 'SCROLL', 'Scrolling feed down to reveal more jobs...');
           await this.platform.scrollFeed();
           await sleep(1500);
           nextJob = await this.platform.selectNextJob(visitedJobKeys);
         }
 
         if (!nextJob || !nextJob.found) {
-          log('PAGINATION', `Page ${currentPage} completed. Checking for next search page...`);
-          await updateHud(this.ws, {
-            page: currentPage,
-            appliedCount: appliedJobs.length,
-            jobTitle: `Advancing to Page ${currentPage + 1}...`,
-            company: 'Search Pagination',
-            status: 'Advancing Page'
-          });
-
-          await appendHudLog(this.ws, 'PAGE', `Completed Page ${currentPage}. Advancing to Page ${currentPage + 1}...`);
-
+          log('PAGINATION', `Page ${currentPage} completed. Advancing to Page ${currentPage + 1}...`);
           const paged = await this.platform.goToNextPage();
           if (paged.success) {
             currentPage++;
@@ -308,38 +254,46 @@ class Orchestrator {
         }
 
         if (nextJob && nextJob.found) {
-          log('TRANSITION', `Targeting: "${nextJob.title}"`);
-          await appendHudLog(this.ws, 'CARD', `Selected listing: "${nextJob.title}"`);
+          log('TRANSITION', `Targeting: "${nextJob.title}" at "${nextJob.company || 'Company'}"`);
           await updateHud(this.ws, {
             page: currentPage,
             appliedCount: appliedJobs.length,
+            failedCount: failedJobs.length,
+            failedJobs: failedJobs,
             jobTitle: nextJob.title,
             company: nextJob.company || 'Selected Job',
             status: 'Target Selected'
           });
           await sleep(2000);
         } else {
-          log('COMPLETE', 'Reached the end of all search result pages. All Easy Apply jobs applied!');
-          await appendHudLog(this.ws, 'COMPLETE', 'Reached the end of all search result pages.');
+          log('COMPLETE', 'Reached the end of all search result pages. All Easy Apply jobs processed!');
           hasMoreJobs = false;
         }
       }
     }
 
     console.log('\n====================================================');
-    log('COMPLETE', `Batch session finished: ${appliedJobs.length} jobs applied!`);
+    log('COMPLETE', `Batch session finished: ${appliedJobs.length} applied, ${failedJobs.length} failed/skipped.`);
     console.log('====================================================');
-    console.table(appliedJobs);
+    if (appliedJobs.length > 0) {
+      console.log('\nSuccessful Applications:');
+      console.table(appliedJobs);
+    }
+    if (failedJobs.length > 0) {
+      console.log('\nFailed / Skipped Listings:');
+      console.table(failedJobs);
+    }
 
     await updateHud(this.ws, {
       page: currentPage,
       appliedCount: appliedJobs.length,
+      failedCount: failedJobs.length,
+      failedJobs: failedJobs,
       jobTitle: 'All Pages Completed',
       company: 'Session Finished',
       status: 'COMPLETE'
     });
 
-    await appendHudLog(this.ws, 'COMPLETE', `Session finished! Total ${appliedJobs.length} jobs applied.`);
     this.ws.close();
     process.exit(0);
   }
