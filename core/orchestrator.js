@@ -174,6 +174,10 @@ class Orchestrator {
 
         let stepCount = 0;
         let submitted = false;
+        let lastStepSignature = '';
+        let stagnationCount = 0;
+        const MAX_STAGNATION = 3;  // After 3 repeats, force error correction
+        const MAX_STAGNATION_DISCARD = 5;  // After 5 repeats, discard application
 
         while (stepCount < 30) {
           stepCount++;
@@ -197,10 +201,39 @@ class Orchestrator {
             break;
           }
 
-          log('STEP', `Step ${stepCount}: "${stepStatus.title || 'Form'}" | Buttons: [${(stepStatus.buttons || []).join(', ')}]`);
+          // Stagnation detection: compare current step signature with previous
+          const currentSignature = (stepStatus.buttons || []).sort().join('|');
+          if (currentSignature === lastStepSignature && currentSignature !== '') {
+            stagnationCount++;
+            log('STAGNATION', `Same step detected ${stagnationCount} time(s): [${currentSignature}]`);
+          } else {
+            stagnationCount = 0;
+            lastStepSignature = currentSignature;
+          }
+
+          // If stuck too long, discard and move on
+          if (stagnationCount >= MAX_STAGNATION_DISCARD) {
+            log('STAGNATION', `Stuck for ${stagnationCount} iterations. Discarding application to avoid infinite loop.`);
+            break;
+          }
+
+          log('STEP', `Step ${stepCount}: "${stepStatus.title || 'Form'}" | Buttons: [${(stepStatus.buttons || []).join(', ')}]${stagnationCount > 0 ? ' [STAGNANT x' + stagnationCount + ']' : ''}`);
 
           // Solve inputs, selects, radios, checkboxes, subforms
           await this.platform.solveCurrentStep(stepCount, stepStatus);
+
+          // If stagnated, run an extra error-correction pass and re-solve
+          if (stagnationCount >= MAX_STAGNATION) {
+            log('AUTO_FIX', `Stagnation threshold reached (${stagnationCount}x). Running aggressive error correction...`);
+            // Extra solve pass to fix any remaining validation errors
+            await this.platform.solveCurrentStep(stepCount, stepStatus);
+            await sleep(300);
+            // Also re-solve location typeahead in case it's blocking
+            if (this.platform.solveLocationTypeahead) {
+              await this.platform.solveLocationTypeahead();
+            }
+            await sleep(200);
+          }
 
           // Try submit
           const submitClicked = await this.platform.trySubmit();

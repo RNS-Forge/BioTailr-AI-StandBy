@@ -139,6 +139,10 @@ class LinkedInPlatform extends BasePlatform {
     return await trySubmitLinkedInModal(this.ws, this.cdpEval);
   }
 
+  async solveLocationTypeahead() {
+    return await solveLocationTypeahead(this.ws, this.cdpEval);
+  }
+
   async tryAdvance() {
     return await tryAdvanceLinkedInModal(this.ws, this.cdpEval);
   }

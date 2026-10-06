@@ -27,12 +27,14 @@ let profile = {
     needSponsorship: 'No'
   },
   experience: {
-    totalYears: 2,
+    totalYears: 1,
     noticePeriodDays: 15,
     currentTitle: 'Full Stack & AI Engineer',
     currentCompany: 'Axodian',
-    currentSalary: '800,000 INR (8 LPA)',
-    expectedSalary: '1,200,000 INR (12 LPA)'
+    currentSalary: '200000',
+    expectedSalary: '450000',
+    currentSalaryLpa: '2',
+    expectedSalaryLpa: '4.5'
   },
   education: {
     degree: 'Bachelor of Technology - BTech',

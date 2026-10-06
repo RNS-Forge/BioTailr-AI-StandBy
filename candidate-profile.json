@@ -22,14 +22,14 @@
     "currentVisaStatus": "Citizen"
   },
   "experience": {
-    "totalYears": 2,
+    "totalYears": 1,
     "noticePeriodDays": 15,
     "currentTitle": "Full Stack & AI Engineer",
     "currentCompany": "Axodian",
-    "currentSalary": "800000",
-    "expectedSalary": "1200000",
-    "currentSalaryLpa": "8",
-    "expectedSalaryLpa": "12"
+    "currentSalary": "200000",
+    "expectedSalary": "450000",
+    "currentSalaryLpa": "2",
+    "expectedSalaryLpa": "4.5"
   },
   "education": {
     "degree": "Bachelor of Technology - BTech",

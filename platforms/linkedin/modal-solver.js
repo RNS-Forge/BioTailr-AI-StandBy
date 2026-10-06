@@ -313,10 +313,10 @@ async function solveFormFields(ws, cdpEval, profile) {
             val = String(prof.experience?.noticePeriodDays || '15');
           } else if (labelText.includes('current ctc') || labelText.includes('current salary') || labelText.includes('fixed ctc')) {
             const isLpa = /lpa|lakh/i.test(labelText) || (el.maxLength > 0 && el.maxLength <= 4);
-            val = isLpa ? String(prof.experience?.currentSalaryLpa || '8') : String(prof.experience?.currentSalary || '800000');
+            val = isLpa ? String(prof.experience?.currentSalaryLpa || '2') : String(prof.experience?.currentSalary || '200000');
           } else if (labelText.includes('expected ctc') || labelText.includes('expected salary')) {
             const isLpa = /lpa|lakh/i.test(labelText) || (el.maxLength > 0 && el.maxLength <= 4);
-            val = isLpa ? String(prof.experience?.expectedSalaryLpa || '12') : String(prof.experience?.expectedSalary || '1200000');
+            val = isLpa ? String(prof.experience?.expectedSalaryLpa || '4.5') : String(prof.experience?.expectedSalary || '450000');
           } else if (labelText.includes('phone') || labelText.includes('mobile')) {
             val = String(prof.personal?.phone || '9361599018').replace(/\D/g, '');
           } else if (labelText.includes('postal') || labelText.includes('zip') || labelText.includes('pin')) {
@@ -326,9 +326,9 @@ async function solveFormFields(ws, cdpEval, profile) {
           } else if (labelText.includes('percentage') || labelText.includes('percent')) {
             val = '85';
           } else {
-            val = String(prof.experience?.totalYears || '2');
+            val = String(prof.experience?.totalYears || '1');
           }
-          const sanitizedDigits = val.replace(/\D/g, '') || '2';
+          const sanitizedDigits = val.replace(/\D/g, '') || '1';
           setVal(el, sanitizedDigits);
         } else {
           // Clean text input (strictly guard so location/city inputs are NEVER set with candidate name!)
@@ -374,17 +374,17 @@ async function solveFormFields(ws, cdpEval, profile) {
       } else if (isTextarea) {
         // Open-ended questions & Cover letters answered as Sanjay N
         if (/cover\s*letter|message|note\s*to|letter/i.test(labelText)) {
-          setVal(el, 'Dear Hiring Team,\\n\\nI am writing to express my strong enthusiasm for this role. With 2 years of hands-on experience as a Full Stack & AI Engineer at Axodian, I build agentic AI pipelines, LLM-powered systems, scalable backends using Python and FastAPI, and responsive React web applications. I take ownership of architecting reliable production solutions that solve real problems. I would love the opportunity to contribute my skills to your team.\\n\\nBest regards,\\nSanjay N\\n2005sanjaynrs@gmail.com | +91 9361599018');
+          setVal(el, 'Dear Hiring Team,\\n\\nI am writing to express my strong enthusiasm for this role. With 1 year of hands-on experience as a Full Stack & AI Engineer at Axodian, I build agentic AI pipelines, LLM-powered systems, scalable backends using Python and FastAPI, and responsive React web applications. I take ownership of architecting reliable production solutions that solve real problems. I would love the opportunity to contribute my skills to your team.\\n\\nBest regards,\\nSanjay N\\n2005sanjaynrs@gmail.com | +91 9361599018');
         } else if (/why.*(hire|work|join|fit|company|us)|interest/i.test(labelText)) {
-          setVal(el, 'As a Full Stack & AI Engineer with 2 years of experience at Axodian, I bring proven expertise in Python, React, and LLM integrations. I am excited to apply my problem-solving ability, rapid learning mindset, and technical background to create high-impact products with your engineering team.');
+          setVal(el, 'As a Full Stack & AI Engineer with 1 year of experience at Axodian, I bring proven expertise in Python, React, and LLM integrations. I am excited to apply my problem-solving ability, rapid learning mindset, and technical background to create high-impact products with your engineering team.');
         } else if (/project|achievement|accomplish|describe.*experience/i.test(labelText)) {
-          setVal(el, 'At Axodian, I developed production AI agent workflows and full-stack web platforms using Python, FastAPI, React, and SQL. I focused on building resilient inference pipelines, robust API integrations, and low-latency database queries.');
+          setVal(el, 'At Axodian, I have developed production AI agent workflows and full-stack web platforms using Python, FastAPI, React, and SQL. I focus on building resilient inference pipelines, robust API integrations, and low-latency database queries.');
         } else if (/relocat|remote|hybrid|travel|commute/i.test(labelText)) {
           setVal(el, 'Yes, I am fully open to remote, hybrid, or on-site arrangements and comfortable with relocation.');
         } else if (/summary|about\s*(yourself|you)|bio/i.test(labelText)) {
-          setVal(el, 'Full Stack & AI Engineer with 2+ years of experience building production AI workflows, full-stack web applications, and backend services. Proficient in Python, FastAPI, React, SQL, LLM toolchains, and cloud deployments.');
+          setVal(el, 'Full Stack & AI Engineer with 1 year of experience building production AI workflows, full-stack web applications, and backend services. Proficient in Python, FastAPI, React, SQL, LLM toolchains, and cloud deployments.');
         } else if (!el.value || /\d{2,}[a-z]+|[a-z]+\d{2,}/i.test(el.value)) {
-          setVal(el, 'Experienced Full Stack & AI Engineer with 2+ years developing scalable applications in Python, React, and generative AI.');
+          setVal(el, 'Full Stack & AI Engineer with 1 year of experience developing scalable applications in Python, React, and generative AI.');
         }
       } else if (isSelect) {
         const opts = Array.from(el.options);
@@ -486,15 +486,17 @@ async function solveFormFields(ws, cdpEval, profile) {
         let digits = current.replace(/\D/g, '');
 
         if (/salary|ctc/i.test(labelText)) {
-          if (digits === '800000') digits = '8';
-          else if (digits === '1200000') digits = '12';
-          else if (digits === '8') digits = '800000';
-          else if (digits === '12') digits = '1200000';
-          else digits = labelText.includes('expected') ? '12' : '8';
+          if (labelText.includes('expected')) {
+            const isLpa = /lpa|lakh/i.test(labelText) || (el.maxLength > 0 && el.maxLength <= 4);
+            digits = isLpa ? '4' : '450000';
+          } else {
+            const isLpa = /lpa|lakh/i.test(labelText) || (el.maxLength > 0 && el.maxLength <= 4);
+            digits = isLpa ? '2' : '200000';
+          }
         } else if (/notice/i.test(labelText)) {
           digits = '15';
         } else if (/experience|year/i.test(labelText)) {
-          digits = '2';
+          digits = '1';
         } else if (/phone|mobile/i.test(labelText)) {
           digits = '9361599018';
         } else if (!digits) {
@@ -506,7 +508,7 @@ async function solveFormFields(ws, cdpEval, profile) {
         if (/city|location|where|residence/i.test(labelText) || el.getAttribute('data-testid') === 'typeahead-input' || /city|location/i.test(el.placeholder || '')) {
           setVal(el, 'Coimbatore, Tamil Nadu, India');
         } else if (el.tagName === 'TEXTAREA') {
-          setVal(el, 'Experienced Full Stack & AI Engineer with 2+ years developing scalable applications in Python, React, and generative AI.');
+          setVal(el, 'Full Stack & AI Engineer with 1 year of experience developing scalable applications in Python, React, and generative AI.');
         } else {
           setVal(el, 'Full Stack & AI Engineer');
         }
