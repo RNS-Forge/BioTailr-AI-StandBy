@@ -2,6 +2,8 @@
  * BioTailr AI StandBy - LinkedIn Easy Apply Modal Solver
  * Solves multi-step application forms, education pruning, experience sub-forms,
  * city comboboxes, typeaheads, radios, and automated submissions.
+ * Includes dynamic error auto-correction (pure numbers for numeric/salary inputs,
+ * dropdown selection for Coimbatore location).
  */
 
 async function getLinkedInModalStatus(ws, cdpEval) {
@@ -77,11 +79,12 @@ async function solveFormFields(ws, cdpEval, profile) {
 
     const setVal = (el, val) => {
       if (!el) return;
+      const strVal = String(val);
       const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement?.prototype : window.HTMLInputElement?.prototype;
       const setter = Object.getOwnPropertyDescriptor(proto || {}, 'value')?.set
         || Object.getOwnPropertyDescriptor(el.__proto__ || {}, 'value')?.set;
-      if (setter) setter.call(el, val);
-      else el.value = val;
+      if (setter) setter.call(el, strVal);
+      else el.value = strVal;
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
     };
@@ -107,7 +110,7 @@ async function solveFormFields(ws, cdpEval, profile) {
         if (el.tagName === 'INPUT' && (el.type === 'text' || !el.type)) {
           if (labelText.includes('title')) setVal(el, 'Full Stack & AI Engineer');
           else if (labelText.includes('company')) setVal(el, 'Axodian');
-          else if (labelText.includes('location')) setVal(el, 'Bengaluru, Karnataka, India');
+          else if (labelText.includes('location')) setVal(el, 'Coimbatore, Tamil Nadu, India');
         } else if (el.tagName === 'SELECT') {
           const opts = Array.from(el.options);
           if (labelText.includes('month')) {
@@ -167,10 +170,14 @@ async function solveFormFields(ws, cdpEval, profile) {
         || Boolean(el.closest('[role="combobox"]'));
 
       if (el.tagName === 'INPUT' && (el.type === 'text' || !el.type || el.type === 'number')) {
-        const isCityOrLocation = labelText.includes('city') || labelText.includes('location') || labelText.includes('address') || labelText.includes('residence') || labelText.includes('postal') || labelText.includes('zip');
+        const isCityOrLocation = labelText.includes('city') || labelText.includes('location') || labelText.includes('address') || labelText.includes('residence') || labelText.includes('postal') || labelText.includes('zip') || isCombobox;
 
         if (isCityOrLocation) {
-          setVal(el, 'Bengaluru, Karnataka, India');
+          // Set location to Coimbatore and trigger typeahead event
+          setVal(el, 'Coimbatore');
+          el.dispatchEvent(new Event('focus', { bubbles: true }));
+          el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'e' }));
+          el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'e' }));
         } else if (labelText.includes('first name') || labelText.includes('given name')) {
           setVal(el, 'Sanjay');
         } else if (labelText.includes('last name') || labelText.includes('family name') || labelText.includes('surname')) {
@@ -179,18 +186,23 @@ async function solveFormFields(ws, cdpEval, profile) {
           setVal(el, '9361599018');
         } else if (labelText.includes('email')) {
           setVal(el, '2005sanjaynrs@gmail.com');
+        } else if (labelText.includes('notice')) {
+          // Pure numbers only for notice period
+          setVal(el, '15');
+        } else if (labelText.includes('current ctc') || labelText.includes('current salary') || labelText.includes('fixed ctc')) {
+          // Strictly pure numbers: 800000 or 8 if LPA field
+          const isLpa = /lpa|lakh/i.test(labelText) || (el.maxLength > 0 && el.maxLength <= 4);
+          setVal(el, isLpa ? '8' : '800000');
+        } else if (labelText.includes('expected ctc') || labelText.includes('expected salary')) {
+          // Strictly pure numbers: 1200000 or 12 if LPA field
+          const isLpa = /lpa|lakh/i.test(labelText) || (el.maxLength > 0 && el.maxLength <= 4);
+          setVal(el, isLpa ? '12' : '1200000');
         } else if (labelText.includes('experience') || labelText.includes('years') || labelText.includes('duration') || labelText.includes('python') || labelText.includes('fastapi') || labelText.includes('react') || labelText.includes('sql') || labelText.includes('ai') || labelText.includes('llm')) {
           setVal(el, '2');
         } else if (labelText.includes('organisation') || labelText.includes('organization') || labelText.includes('company')) {
           setVal(el, 'Axodian');
         } else if (labelText.includes('designation') || labelText.includes('title')) {
           setVal(el, 'Full Stack & AI Engineer');
-        } else if (labelText.includes('notice')) {
-          setVal(el, '15');
-        } else if (labelText.includes('current ctc') || labelText.includes('current salary')) {
-          setVal(el, '800,000 INR (8 LPA)');
-        } else if (labelText.includes('expected ctc') || labelText.includes('expected salary')) {
-          setVal(el, '1,200,000 INR (12 LPA)');
         } else if (labelText.includes('linkedin')) {
           setVal(el, 'https://www.linkedin.com/in/sanjay--n');
         } else if (labelText.includes('github')) {
@@ -204,8 +216,6 @@ async function solveFormFields(ws, cdpEval, profile) {
             setVal(el, '1');
           } else if (el.tagName === 'TEXTAREA') {
             setVal(el, 'Experienced in AI engineering, Python, React, and scalable backend services.');
-          } else if (isCombobox) {
-            setVal(el, 'Bengaluru, Karnataka, India');
           } else {
             setVal(el, 'Experienced Software Engineer');
           }
@@ -251,7 +261,7 @@ async function solveFormFields(ws, cdpEval, profile) {
       }
     });
 
-    // Select any open typeahead dropdown option (e.g. city, location, institution)
+    // C. Select Typeahead Dropdown Option (Prefers Coimbatore)
     const openOptions = Array.from(document.querySelectorAll([
       '[role="listbox"] [role="option"]',
       'div[role="option"]',
@@ -264,11 +274,73 @@ async function solveFormFields(ws, cdpEval, profile) {
     ].join(', '))).filter(o => o.offsetWidth > 0 || o.offsetHeight > 0);
 
     if (openOptions.length > 0) {
-      const opt = openOptions[0];
-      opt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-      opt.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-      opt.click();
+      const coimbatoreOpt = openOptions.find(o => /coimbatore/i.test(o.innerText || '')) || openOptions[0];
+      coimbatoreOpt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      coimbatoreOpt.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+      coimbatoreOpt.click();
     }
+
+    // D. Validation Error Auto-Correction Pass
+    // Detects any input marked invalid and sanitizes it strictly to numbers or clean text
+    const errorMessages = Array.from(modal.querySelectorAll('.artdeco-inline-feedback--error, [data-test-form-element-error-messages], .fb-form-element__error-text'));
+    const invalidInputs = Array.from(modal.querySelectorAll('input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="true"]'));
+
+    const problemInputs = new Set([
+      ...invalidInputs,
+      ...errorMessages.map(em => {
+        let parent = em.parentElement;
+        while (parent && parent !== modal) {
+          const inp = parent.querySelector('input, select, textarea');
+          if (inp) return inp;
+          parent = parent.parentElement;
+        }
+        return null;
+      }).filter(Boolean)
+    ]);
+
+    problemInputs.forEach(el => {
+      let p = el.parentElement;
+      let labelText = '';
+      for (let i = 0; i < 5; i++) {
+        if (!p || p === modal) break;
+        const lbl = p.querySelector('label');
+        if (lbl && lbl.innerText.trim()) { labelText = lbl.innerText.toLowerCase(); break; }
+        p = p.parentElement;
+      }
+      if (!labelText) labelText = (el.getAttribute('aria-label') || el.name || el.id || '').toLowerCase();
+
+      // Check if it is a salary/CTC field
+      if (/ctc|salary|package|compensation|remuneration/i.test(labelText)) {
+        const curVal = el.value || '';
+        // If current value contains non-digits, strip them immediately
+        if (/\D/.test(curVal)) {
+          const onlyDigits = curVal.replace(/\D/g, '');
+          setVal(el, onlyDigits || (labelText.includes('expected') ? '1200000' : '800000'));
+        } else {
+          // If pure numbers failed, it might be an LPA field (e.g. 8 or 12) or vice-versa
+          if (curVal === '800000' || curVal.length > 4) {
+            setVal(el, '8');
+          } else if (curVal === '1200000' || curVal.length > 4) {
+            setVal(el, '12');
+          } else if (curVal === '8') {
+            setVal(el, '800000');
+          } else if (curVal === '12') {
+            setVal(el, '1200000');
+          }
+        }
+      } else if (/notice/i.test(labelText)) {
+        setVal(el, '15');
+      } else if (/experience|year|count|month/i.test(labelText)) {
+        setVal(el, '2');
+      } else if (/city|location|address/i.test(labelText)) {
+        setVal(el, 'Coimbatore');
+      } else if (el.type === 'number' || (el.value && /^\d+/.test(el.value))) {
+        // Any numeric field with error: sanitize to pure digits
+        const digits = (el.value || '').replace(/\D/g, '') || '1';
+        setVal(el, digits);
+      }
+      el.dispatchEvent(new Event('blur', { bubbles: true }));
+    });
   })()`);
 }
 
@@ -277,9 +349,13 @@ async function trySubmitLinkedInModal(ws, cdpEval) {
     const modal = document.querySelector('dialog, [role="dialog"], .jobs-easy-apply-modal, .artdeco-modal');
     if (!modal) return false;
 
+    // Check if there are uncorrected errors blocking submission
+    const hasActiveErrors = Array.from(modal.querySelectorAll('.artdeco-inline-feedback--error')).some(e => e.offsetWidth > 0);
+    if (hasActiveErrors) return false;
+
     const submitBtn = Array.from(modal.querySelectorAll('button')).find(b => {
       const t = b.innerText.trim().toLowerCase();
-      return t === 'submit application' || t === 'submit';
+      return (t === 'submit application' || t === 'submit') && b.offsetWidth > 0;
     });
 
     if (submitBtn) {
@@ -302,10 +378,10 @@ async function tryAdvanceLinkedInModal(ws, cdpEval) {
     const modal = document.querySelector('dialog, [role="dialog"], .jobs-easy-apply-modal, .artdeco-modal');
     if (!modal) return false;
 
-    const reviewBtn = Array.from(modal.querySelectorAll('button')).find(b => /review/i.test(b.innerText.trim()));
+    const reviewBtn = Array.from(modal.querySelectorAll('button')).find(b => /review/i.test(b.innerText.trim()) && b.offsetWidth > 0);
     if (reviewBtn) { reviewBtn.click(); return 'review'; }
 
-    const nextBtn = Array.from(modal.querySelectorAll('button')).find(b => /next|continue/i.test(b.innerText.trim()));
+    const nextBtn = Array.from(modal.querySelectorAll('button')).find(b => /next|continue/i.test(b.innerText.trim()) && b.offsetWidth > 0);
     if (nextBtn) { nextBtn.click(); return 'next'; }
 
     return false;

@@ -4,7 +4,7 @@
     "lastName": "N",
     "fullName": "Sanjay N",
     "email": "2005sanjaynrs@gmail.com",
-    "phone": "+91 9361599018",
+    "phone": "9361599018",
     "city": "Coimbatore",
     "state": "Tamil Nadu",
     "country": "India",
@@ -20,10 +20,12 @@
   "experience": {
     "totalYears": 2,
     "noticePeriodDays": 15,
-    "currentTitle": "Software Development Engineer",
+    "currentTitle": "Full Stack & AI Engineer",
     "currentCompany": "Axodian",
-    "currentSalary": "800,000 INR (8 LPA)",
-    "expectedSalary": "1,200,000 INR (12 LPA)"
+    "currentSalary": "800000",
+    "expectedSalary": "1200000",
+    "currentSalaryLpa": "8",
+    "expectedSalaryLpa": "12"
   },
   "education": {
     "degree": "Bachelor of Technology - BTech",
