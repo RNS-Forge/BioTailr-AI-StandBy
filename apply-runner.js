@@ -10,6 +10,8 @@
  * 4. 0 months for additional month dropdowns.
  * 5. Affirmative consent for qualification and agreement questions; No for visa sponsorship.
  * 6. Viewport scrolling, submission confirmation dismissal, and automated card advancing.
+ * 7. Multi-page continuous execution: page 1 through last page (10+ pages) without stopping.
+ * 8. Live On-Screen StandBy HUD: real-time progress card displayed directly inside Chrome.
  */
 
 const http = require('http');
@@ -46,7 +48,7 @@ let profile = {
     institution: 'Anna University / SNS College of Technology'
   },
   settings: {
-    batchTarget: 5,
+    batchTarget: 0, // 0 = unlimited continuous apply
     cdpPort: 9222
   }
 };
@@ -63,7 +65,6 @@ try {
 
 const cdpPort = profile.settings?.cdpPort || 9222;
 const batchTarget = (profile.settings?.batchTarget === 0 || profile.settings?.batchTarget === 'unlimited') ? Infinity : (profile.settings?.batchTarget || Infinity);
-
 
 function log(tag, message) {
   const ts = new Date().toLocaleTimeString([], { hour12: false });
@@ -84,7 +85,7 @@ async function getLinkedInTab() {
           const tabs = JSON.parse(data);
           const li = tabs.find(t => t.url && t.url.includes('linkedin.com/jobs'));
           if (li) resolve(li);
-          else reject(new Error('No active LinkedIn Jobs tab detected in Chrome. Please open LinkedIn in the debugging Chrome window.'));
+          else reject(new Error('No active LinkedIn Jobs tab detected in Chrome. Please open LinkedIn search results in the debugging Chrome window.'));
         } catch (err) {
           reject(err);
         }
@@ -114,6 +115,95 @@ function cdpEval(ws, expression, awaitPromise = false) {
   });
 }
 
+async function ensureHudInjected(ws) {
+  await cdpEval(ws, `(() => {
+    if (document.getElementById('biotailr-standby-hud')) return;
+
+    const hud = document.createElement('div');
+    hud.id = 'biotailr-standby-hud';
+    hud.style.cssText = \`
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      width: 320px;
+      background: #ffffff;
+      border: 1px solid #e5e7eb;
+      border-top: 3px solid #10b981;
+      border-radius: 6px;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+      z-index: 9999999;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 13px;
+      color: #111827;
+      overflow: hidden;
+      transition: all 0.2s ease;
+    \`;
+
+    hud.innerHTML = \`
+      <div style="padding: 10px 14px; background: #f9fafb; border-bottom: 1px solid #e5e7eb; display: flex; align-items: center; justify-content: space-between;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <div style="width: 8px; height: 8px; border-radius: 50%; background: #10b981; box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);"></div>
+          <span style="font-weight: 700; color: #111827; letter-spacing: -0.2px;">BioTailr StandBy</span>
+          <span style="font-size: 10px; font-weight: 600; text-transform: uppercase; background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; padding: 2px 6px; border-radius: 4px;">ACTIVE</span>
+        </div>
+        <button id="bt-standby-min-btn" style="border: none; background: transparent; cursor: pointer; color: #6b7280; font-size: 16px; line-height: 1; padding: 2px 4px;">_</button>
+      </div>
+      <div id="bt-standby-body" style="padding: 12px 14px;">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 11px; color: #4b5563;">
+          <span>Session Progress</span>
+          <span style="font-weight: 600; color: #059669;" id="bt-standby-stats">Page 1 | Applied: 0</span>
+        </div>
+        <div style="background: #f3f4f6; border-radius: 4px; padding: 8px 10px; margin-bottom: 10px; border-left: 3px solid #10b981;">
+          <div style="font-size: 10px; text-transform: uppercase; color: #6b7280; font-weight: 600;">Current Target</div>
+          <div id="bt-standby-job" style="font-weight: 600; color: #111827; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Scanning...</div>
+          <div id="bt-standby-company" style="font-size: 11px; color: #4b5563;">LinkedIn Feed</div>
+        </div>
+        <div style="display: flex; align-items: center; justify-content: space-between; font-size: 11px; padding: 6px 8px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 4px;">
+          <span style="color: #166534; font-weight: 500;">Status</span>
+          <span id="bt-standby-status" style="font-weight: 600; color: #059669;">Auto-Applying</span>
+        </div>
+        <div id="bt-standby-log" style="margin-top: 8px; font-size: 10px; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+          Ready. Starting continuous job iterator...
+        </div>
+      </div>
+    \`;
+
+    document.body.appendChild(hud);
+
+    window.__bioTailrUpdateHud = (data) => {
+      const stats = document.getElementById('bt-standby-stats');
+      const job = document.getElementById('bt-standby-job');
+      const comp = document.getElementById('bt-standby-company');
+      const status = document.getElementById('bt-standby-status');
+      const log = document.getElementById('bt-standby-log');
+      if (stats && data.page !== undefined) stats.innerText = 'Page ' + data.page + ' | Applied: ' + (data.appliedCount || 0);
+      if (job && data.jobTitle) job.innerText = data.jobTitle;
+      if (comp && data.company) comp.innerText = data.company;
+      if (status && data.status) status.innerText = data.status;
+      if (log && data.message) log.innerText = data.message;
+    };
+
+    const minBtn = document.getElementById('bt-standby-min-btn');
+    const body = document.getElementById('bt-standby-body');
+    if (minBtn && body) {
+      minBtn.onclick = () => {
+        const isHidden = body.style.display === 'none';
+        body.style.display = isHidden ? 'block' : 'none';
+        minBtn.innerText = isHidden ? '_' : '+';
+      };
+    }
+  })()`);
+}
+
+async function updateHud(ws, state) {
+  const serialized = JSON.stringify(state);
+  await cdpEval(ws, `(() => {
+    if (typeof window.__bioTailrUpdateHud === 'function') {
+      window.__bioTailrUpdateHud(${serialized});
+    }
+  })()`);
+}
+
 async function runAutoApply() {
   console.log('====================================================');
   console.log('   BioTailr AI - Standalone Autonomous Auto-Apply   ');
@@ -126,7 +216,10 @@ async function runAutoApply() {
   const ws = new WebSocket(liTab.webSocketDebuggerUrl);
   await new Promise(r => { ws.onopen = r; });
 
+  await ensureHudInjected(ws);
+
   const appliedJobs = [];
+  const visitedJobKeys = new Set();
 
   let jobIndex = 0;
   let currentPage = 1;
@@ -138,6 +231,8 @@ async function runAutoApply() {
     const targetLabel = batchTarget === Infinity ? 'Unlimited' : String(batchTarget);
     log('BATCH', `[Job #${jobIndex} | Page ${currentPage} | Target: ${targetLabel}] Inspecting current active job card...`);
     console.log(`----------------------------------------------------`);
+
+    await ensureHudInjected(ws);
 
     const jobInfo = await cdpEval(ws, `(() => {
       const title = document.querySelector('.job-details-jobs-unified-top-card__job-title, h1.job-details-jobs-unified-top-card__job-title, .jobs-search__job-details--container h1, .jobs-unified-top-card__job-title, .job-card-list__title, h1')?.innerText?.trim()
@@ -153,13 +248,25 @@ async function runAutoApply() {
     log('INFO', `Target Job: "${jobInfo.title || 'Untitled'}" at "${jobInfo.company || 'Company'}"`);
     log('INFO', `Easy Apply Available: ${jobInfo.hasEasyApply}`);
 
+    const currentKey = (jobInfo.title + '::' + jobInfo.company).toLowerCase();
+    visitedJobKeys.add(currentKey);
+
+    await updateHud(ws, {
+      page: currentPage,
+      appliedCount: appliedJobs.length,
+      jobTitle: jobInfo.title,
+      company: jobInfo.company,
+      status: jobInfo.hasEasyApply ? 'Applying' : 'Skipping (No Easy Apply)',
+      message: `Inspecting Job #${jobIndex}: ${jobInfo.title}`
+    });
+
     if (!jobInfo.hasEasyApply) {
       log('SKIP', 'Easy Apply button not present on current job card. Moving to next card in search feed...');
-      let nextJob = await selectNextFeedCard(ws);
+      let nextJob = await selectNextFeedCard(ws, visitedJobKeys);
       if (!nextJob || !nextJob.found) {
         await scrollFeedContainer(ws);
         await sleep(1500);
-        nextJob = await selectNextFeedCard(ws);
+        nextJob = await selectNextFeedCard(ws, visitedJobKeys);
       }
       if (!nextJob || !nextJob.found) {
         const paged = await goToNextSearchPage(ws);
@@ -167,15 +274,25 @@ async function runAutoApply() {
           currentPage++;
           log('PAGINATION', `Advanced to Search Results Page ${currentPage}. Loading fresh jobs...`);
           await sleep(3500);
+          await ensureHudInjected(ws);
         } else {
           hasMoreJobs = false;
         }
       }
-      await sleep(2000);
+      await sleep(1500);
       continue;
     }
 
     log('ACTION', 'Clicking Easy Apply button...');
+    await updateHud(ws, {
+      page: currentPage,
+      appliedCount: appliedJobs.length,
+      jobTitle: jobInfo.title,
+      company: jobInfo.company,
+      status: 'Opening Form',
+      message: 'Clicked Easy Apply button'
+    });
+
     await cdpEval(ws, `(() => {
       const btn = Array.from(document.querySelectorAll('button')).find(b => (b.innerText || '').toLowerCase().includes('easy apply') && b.offsetWidth > 0);
       if (btn) btn.click();
@@ -213,6 +330,14 @@ async function runAutoApply() {
       }
 
       log('STEP', `Step ${stepCount}: "${stepStatus.title || 'Form'}" | Action Buttons: [${stepStatus.buttons.join(', ')}]`);
+      await updateHud(ws, {
+        page: currentPage,
+        appliedCount: appliedJobs.length,
+        jobTitle: jobInfo.title,
+        company: jobInfo.company,
+        status: `Solving Step ${stepCount}`,
+        message: `${stepStatus.title || 'Form Filling'}`
+      });
 
       // 1. Intercept "Update your profile" or intermediate confirmation dialog
       const promptHandled = await cdpEval(ws, `(() => {
@@ -300,103 +425,102 @@ async function runAutoApply() {
           else el.value = val;
           el.dispatchEvent(new Event('input', { bubbles: true }));
           el.dispatchEvent(new Event('change', { bubbles: true }));
-          el.dispatchEvent(new Event('blur', { bubbles: true }));
         };
 
-        // A. Resolve "Edit experience" sub-card if visible or if validation errors exist
-        const isExpForm = Array.from(modal.querySelectorAll('*')).some(el => /edit\s*experience|add\s*work\s*experience/i.test(el.innerText || ''));
-        const hasFormErrors = Boolean(modal.querySelector('.artdeco-inline-feedback--error, [data-test-form-element-error-messages]'));
+        // A. Resolve nested "Edit experience" sub-card / required field errors
+        const expHeaders = Array.from(modal.querySelectorAll('h3, h4, legend, .artdeco-modal__header')).filter(h => {
+          return /edit experience|add experience|work experience/i.test(h.innerText || '');
+        });
 
-        if (isExpForm || hasFormErrors) {
-          // 1. Title input
-          const titleInput = modal.querySelector('input[id*="title"], input[name*="title"], input[aria-label*="title"]')
-            || Array.from(modal.querySelectorAll('input[type="text"]')).find(i => {
-              const p = i.closest('.fb-dash-form-element, div');
-              return /title/i.test(p?.innerText || '');
-            });
-          if (titleInput && (!titleInput.value || titleInput.value.length < 2)) {
-            setVal(titleInput, 'Full Stack & AI Engineer');
-          }
+        if (expHeaders.length > 0) {
+          const expInputs = Array.from(modal.querySelectorAll('input:not([type="hidden"]), select'));
+          expInputs.forEach(el => {
+            let p = el.parentElement;
+            let labelText = '';
+            for (let i = 0; i < 5; i++) {
+              if (!p || p === modal) break;
+              const lbl = p.querySelector('label');
+              if (lbl && lbl.innerText.trim()) { labelText = lbl.innerText.toLowerCase(); break; }
+              p = p.parentElement;
+            }
+            if (!labelText) labelText = (el.getAttribute('aria-label') || el.name || el.id || '').toLowerCase();
 
-          // 2. Company input
-          const compInput = modal.querySelector('input[id*="company"], input[name*="company"], input[aria-label*="company"]')
-            || Array.from(modal.querySelectorAll('input[type="text"]')).find(i => {
-              const p = i.closest('.fb-dash-form-element, div');
-              return /company/i.test(p?.innerText || '');
-            });
-          if (compInput && (!compInput.value || compInput.value.length < 2)) {
-            setVal(compInput, 'Axodian');
-          }
-
-          // 3. Month & Year selects in Dates of employment
-          const selects = Array.from(modal.querySelectorAll('select'));
-          selects.forEach(sel => {
-            const p = sel.closest('.fb-dash-form-element, div, fieldset');
-            const txt = ((sel.getAttribute('aria-label') || '') + ' ' + (sel.id || '') + ' ' + (p?.innerText || '')).toLowerCase();
-            if (/month/i.test(txt) && sel.selectedIndex <= 0) {
-              const idx = Array.from(sel.options).findIndex(o => /january|jan|^1$/i.test(o.text.trim()));
-              sel.selectedIndex = idx !== -1 ? idx : (sel.options.length > 1 ? 1 : 0);
-              sel.dispatchEvent(new Event('change', { bubbles: true }));
-            } else if (/year/i.test(txt) && sel.selectedIndex <= 0) {
-              const yIdx = Array.from(sel.options).findIndex(o => /2022|2021|2023/.test(o.text));
-              sel.selectedIndex = yIdx !== -1 ? yIdx : (sel.options.length > 1 ? 1 : 0);
-              sel.dispatchEvent(new Event('change', { bubbles: true }));
+            if (el.tagName === 'INPUT' && (el.type === 'text' || !el.type)) {
+              if (labelText.includes('title')) setVal(el, 'Full Stack & AI Engineer');
+              else if (labelText.includes('company')) setVal(el, 'Axodian');
+              else if (labelText.includes('location')) setVal(el, 'Bengaluru, Karnataka, India');
+            } else if (el.tagName === 'SELECT') {
+              const opts = Array.from(el.options);
+              if (labelText.includes('month')) {
+                const idx = opts.findIndex(o => /january|jan|^1$/i.test(o.text.trim()));
+                if (idx !== -1) { el.selectedIndex = idx; el.dispatchEvent(new Event('change', { bubbles: true })); }
+              } else if (labelText.includes('year')) {
+                const idx = opts.findIndex(o => /2022|2021|2023/i.test(o.text.trim()));
+                if (idx !== -1) { el.selectedIndex = idx; el.dispatchEvent(new Event('change', { bubbles: true })); }
+              }
+            } else if (el.type === 'checkbox' && /current|currently work/i.test(labelText)) {
+              if (!el.checked) { el.click(); el.dispatchEvent(new Event('change', { bubbles: true })); }
             }
           });
 
-          // 4. "I currently work here" checkbox
-          const workCb = modal.querySelector('input[type="checkbox"][id*="current"], input[type="checkbox"]');
-          if (workCb && !workCb.checked) {
-            workCb.click();
-            workCb.checked = true;
-            workCb.dispatchEvent(new Event('change', { bubbles: true }));
-          }
-
-          // 5. If sub-card Save button exists, click it to persist
-          const saveBtn = Array.from(modal.querySelectorAll('button')).find(b => /^save$/i.test(b.innerText.trim()));
+          // Click Save button on experience sub-form
+          const saveBtn = Array.from(modal.querySelectorAll('button')).find(b => {
+            const t = b.innerText.trim().toLowerCase();
+            return (t === 'save' || t === 'save changes') && b.offsetWidth > 0;
+          });
           if (saveBtn) {
             saveBtn.click();
+            return;
+          }
+
+          // Handle "Delete experience" if unable to save
+          const deleteBtn = Array.from(modal.querySelectorAll('button')).find(b => {
+            const t = b.innerText.trim().toLowerCase();
+            return (t.includes('delete experience') || t === 'delete') && b.offsetWidth > 0;
+          });
+          if (deleteBtn) {
+            deleteBtn.click();
+            setTimeout(() => {
+              const confirmBtn = document.querySelector('.artdeco-modal__confirm-dialog-btn, button[data-control-name="confirm_delete"], button[data-test-dialog-primary-btn]');
+              if (confirmBtn) confirmBtn.click();
+            }, 300);
+            return;
           }
         }
 
-        // B. Handle Delete Experience confirmation if dialog appeared
-        const delConfirm = document.querySelector('.artdeco-modal__confirm-dialog-btn, button[data-control-name="confirm_delete"], button[data-test-dialog-primary-btn]');
-        if (delConfirm) {
-          delConfirm.click();
-        }
+        // B. Standard Field Solver
+        const inputs = Array.from(modal.querySelectorAll('input:not([type="hidden"]), textarea, select'));
 
-        // C. Standard Form Elements Filling
-        const rawInputs = Array.from(modal.querySelectorAll('input:not([type="hidden"]), select, textarea')).filter(el => {
-          return !el.disabled && !el.readOnly && (el.offsetWidth > 0 || el.offsetHeight > 0 || el.type === 'radio' || el.type === 'checkbox');
-        });
+        inputs.forEach(el => {
+          let p = el.parentElement;
+          let labelText = '';
+          for (let i = 0; i < 5; i++) {
+            if (!p || p === modal) break;
+            const lbl = p.querySelector('label');
+            if (lbl && lbl.innerText.trim()) { labelText = lbl.innerText.toLowerCase(); break; }
+            p = p.parentElement;
+          }
+          if (!labelText) labelText = (el.getAttribute('aria-label') || el.name || el.id || '').toLowerCase();
 
-        rawInputs.forEach(el => {
-          const labelEl = el.id ? document.querySelector('label[for="' + el.id + '"]') : null;
-          const pContainer = el.closest('.fb-dash-form-element, .jobs-easy-apply-form-section__grouping, [data-test-single-typeahead-entity-form-component], div[class*="form-component"], div[class*="form-element"], fieldset, li') || el.parentElement;
-          const labelText = ((labelEl ? labelEl.innerText : '') + ' ' + (pContainer ? pContainer.innerText : '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('placeholder') || '') + ' ' + (el.name || '') + ' ' + el.id).replace(/\\s+/g, ' ').toLowerCase();
+          const isCombobox = el.getAttribute('role') === 'combobox'
+            || el.classList.contains('search-basic-typeahead__input')
+            || el.classList.contains('basic-typeahead__input')
+            || Boolean(el.closest('[role="combobox"]'));
 
-          const isCombobox = el.getAttribute('role') === 'combobox' || el.getAttribute('aria-autocomplete') === 'list' || el.classList.contains('search-basic-typeahead') || Boolean(el.closest('.search-basic-typeahead, .search-vertical-typeahead'));
+          if (el.tagName === 'INPUT' && (el.type === 'text' || !el.type || el.type === 'number')) {
+            const isCityOrLocation = labelText.includes('city') || labelText.includes('location') || labelText.includes('address') || labelText.includes('residence') || labelText.includes('postal') || labelText.includes('zip');
 
-          if (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && ['text', 'tel', 'email', 'url', 'number', 'search', ''].includes(el.type))) {
-            const isExp = /years.*experience|experience.*years|how\\s*many\\s*years/i.test(labelText) && !/salary|ctc|notice|grad/i.test(labelText);
-            const isTech = /resume|python|sql|full\\s*stack|ai|engineer|developer|software|backend|react/i.test(labelText);
-            const isLocation = /city|location|address|where|metro|town|area|place|state|country/i.test(labelText) || (isCombobox && !/company|title|school|college|degree|skill|role|name/i.test(labelText));
-
-            if (isExp) {
-              setVal(el, isTech ? '2' : '1');
-            } else if (isLocation) {
+            if (isCityOrLocation) {
               setVal(el, 'Bengaluru, Karnataka, India');
-            } else if (/first\\s*name|^fname$/i.test(labelText)) {
+            } else if (labelText.includes('first name') || labelText.includes('given name')) {
               setVal(el, 'Sanjay');
-            } else if (/last\\s*name|^lname$/i.test(labelText)) {
+            } else if (labelText.includes('last name') || labelText.includes('family name') || labelText.includes('surname')) {
               setVal(el, 'N');
-            } else if (/full\\s*name|your\\s*name|candidate\\s*name/i.test(labelText)) {
-              setVal(el, 'Sanjay N');
-            } else if (labelText.includes('headline')) {
-              setVal(el, 'Generative AI & Full Stack Engineer');
-            } else if (labelText.includes('income expectation')) {
-              setVal(el, '1,200,000 INR (12 LPA)');
-            } else if (labelText.includes('total experience')) {
+            } else if (labelText.includes('phone') || labelText.includes('mobile')) {
+              setVal(el, '9361599018');
+            } else if (labelText.includes('email')) {
+              setVal(el, '2005sanjaynrs@gmail.com');
+            } else if (labelText.includes('experience') || labelText.includes('years') || labelText.includes('duration') || labelText.includes('python') || labelText.includes('fastapi') || labelText.includes('react') || labelText.includes('sql') || labelText.includes('ai') || labelText.includes('llm')) {
               setVal(el, '2');
             } else if (labelText.includes('organisation') || labelText.includes('organization') || labelText.includes('company')) {
               setVal(el, 'Axodian');
@@ -488,7 +612,7 @@ async function runAutoApply() {
         }
       })()`);
 
-      // 3. Navigation Check: Submit Application
+      // 4. Navigation Check: Submit Application
       const submitClicked = await cdpEval(ws, `(() => {
         const modal = document.querySelector('dialog, [role="dialog"], .jobs-easy-apply-modal, .artdeco-modal');
         if (!modal) return false;
@@ -514,6 +638,15 @@ async function runAutoApply() {
 
       if (submitClicked) {
         log('SUBMIT', 'Clicked "Submit application"!');
+        await updateHud(ws, {
+          page: currentPage,
+          appliedCount: appliedJobs.length + 1,
+          jobTitle: jobInfo.title,
+          company: jobInfo.company,
+          status: 'Submitted!',
+          message: 'Application successfully submitted'
+        });
+
         await sleep(1500);
 
         // Auto-dismiss confirmation modal
@@ -529,7 +662,7 @@ async function runAutoApply() {
         break;
       }
 
-      // 4. Navigation Check: Review / Next
+      // 5. Navigation Check: Review / Next
       const nextClicked = await cdpEval(ws, `(() => {
         const modal = document.querySelector('dialog, [role="dialog"], .jobs-easy-apply-modal, .artdeco-modal');
         if (!modal) return false;
@@ -571,33 +704,61 @@ async function runAutoApply() {
 
     if (jobIndex < batchTarget) {
       log('TRANSITION', 'Selecting next job card in search feed...');
-      let nextJob = await selectNextFeedCard(ws);
+      await updateHud(ws, {
+        page: currentPage,
+        appliedCount: appliedJobs.length,
+        jobTitle: 'Finding next job...',
+        company: 'LinkedIn Feed',
+        status: 'Scanning Cards',
+        message: 'Looking for next unvisited Easy Apply listing'
+      });
+
+      let nextJob = await selectNextFeedCard(ws, visitedJobKeys);
 
       if (!nextJob || !nextJob.found) {
-        log('FEED', 'End of visible cards. Scrolling search feed down to load more...');
+        log('FEED', 'End of visible cards on page. Scrolling search feed down to load more...');
         await scrollFeedContainer(ws);
         await sleep(1500);
-        nextJob = await selectNextFeedCard(ws);
+        nextJob = await selectNextFeedCard(ws, visitedJobKeys);
       }
 
       if (!nextJob || !nextJob.found) {
         log('PAGINATION', `Page ${currentPage} completed. Checking for next search page...`);
+        await updateHud(ws, {
+          page: currentPage,
+          appliedCount: appliedJobs.length,
+          jobTitle: `Advancing to Page ${currentPage + 1}...`,
+          company: 'LinkedIn Search',
+          status: 'Advancing Page',
+          message: `Finished Page ${currentPage}. Loading Page ${currentPage + 1}...`
+        });
+
         const paged = await goToNextSearchPage(ws);
         if (paged.success) {
           currentPage++;
           log('PAGINATION', `Advanced to Search Results Page ${currentPage}. Loading fresh jobs...`);
           await sleep(3500);
-          nextJob = await selectNextFeedCard(ws);
+          await ensureHudInjected(ws);
+
+          nextJob = await selectNextFeedCard(ws, visitedJobKeys);
           if (!nextJob || !nextJob.found) {
             await scrollFeedContainer(ws);
             await sleep(1500);
-            nextJob = await selectNextFeedCard(ws);
+            nextJob = await selectNextFeedCard(ws, visitedJobKeys);
           }
         }
       }
 
       if (nextJob && nextJob.found) {
         log('TRANSITION', `Targeting: "${nextJob.title}"`);
+        await updateHud(ws, {
+          page: currentPage,
+          appliedCount: appliedJobs.length,
+          jobTitle: nextJob.title,
+          company: nextJob.company || 'Selected Job',
+          status: 'Target Selected',
+          message: `Selected: ${nextJob.title}`
+        });
         await sleep(2000);
       } else {
         log('COMPLETE', 'Reached the end of all search result pages. All Easy Apply jobs applied!');
@@ -611,75 +772,187 @@ async function runAutoApply() {
   console.log('====================================================');
   console.table(appliedJobs);
 
+  await updateHud(ws, {
+    page: currentPage,
+    appliedCount: appliedJobs.length,
+    jobTitle: 'All Pages Completed',
+    company: 'Session Finished',
+    status: 'COMPLETE',
+    message: `Batch finished: ${appliedJobs.length} jobs applied!`
+  });
+
   ws.close();
   process.exit(0);
 }
 
-async function selectNextFeedCard(ws) {
-  return await cdpEval(ws, `(() => {
-    const cards = Array.from(document.querySelectorAll('.jobs-search-results-list__list-item, .job-card-container, [data-occludable-job-id]'));
-    for (const card of cards) {
-      const t = card.innerText.toLowerCase();
-      const isApplied = t.includes('applied') || t.includes('application submitted');
-      const isEasyApply = t.includes('easy apply');
-      const isActive = card.classList.contains('jobs-search-results-list__list-item--active') || card.classList.contains('selected') || Boolean(card.querySelector('.job-card-container--active'));
+/**
+ * Universal Job Card Selector
+ * Operates across both Modern Atomic CSS layout and Legacy LinkedIn layouts.
+ */
+async function selectNextFeedCard(ws, visitedSet) {
+  const visitedArray = Array.from(visitedSet);
+  const serialized = JSON.stringify(visitedArray);
 
-      if (isEasyApply && !isApplied && !isActive) {
+  return await cdpEval(ws, `(() => {
+    const visited = new Set(${serialized});
+
+    // 1. Modern Layout: Discover job cards via Dismiss buttons or card containers
+    const dismissBtns = Array.from(document.querySelectorAll('button[aria-label*="Dismiss"], button[aria-label*="dismiss"]'));
+    for (const btn of dismissBtns) {
+      const label = btn.getAttribute('aria-label') || '';
+      const m = label.match(/Dismiss\\s+(.*?)\\s+job/i);
+      const title = m ? m[1].trim() : '';
+
+      let card = btn.parentElement;
+      while (card && card.tagName !== 'BODY') {
+        if (card.nextElementSibling?.tagName === 'HR' || card.previousElementSibling?.tagName === 'HR') break;
+        card = card.parentElement;
+      }
+      if (!card) continue;
+
+      const text = (card.innerText || '').toLowerCase();
+      const isApplied = text.includes('applied') || text.includes('application submitted');
+
+      // Extract company
+      const compEl = card.querySelector('div[class*="dj9lki"], p, span');
+      const company = compEl ? compEl.innerText.trim() : '';
+      const key = (title + '::' + company).toLowerCase();
+
+      if (!visited.has(key) && !isApplied) {
+        const clickTarget = card.querySelector('[componentkey], div[role="button"][tabindex="0"], a') || card;
+        clickTarget.scrollIntoView({ behavior: 'instant', block: 'center' });
+        clickTarget.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+        clickTarget.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+        clickTarget.click();
+        return { found: true, title, company, key };
+      }
+    }
+
+    // 2. Component Key direct cards
+    const compCards = Array.from(document.querySelectorAll('[componentkey], div[role="button"][tabindex="0"]')).filter(el => {
+      return el.offsetHeight > 40 && el.offsetWidth > 150;
+    });
+
+    for (const card of compCards) {
+      const text = (card.innerText || '').toLowerCase();
+      const isApplied = text.includes('applied') || text.includes('application submitted');
+      const titleEl = card.querySelector('p, span, h3, h2, strong');
+      const title = titleEl ? titleEl.innerText.trim() : '';
+      const key = title.toLowerCase();
+
+      if (title && !visited.has(key) && !isApplied) {
+        card.scrollIntoView({ behavior: 'instant', block: 'center' });
+        card.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+        card.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+        card.click();
+        return { found: true, title, key };
+      }
+    }
+
+    // 3. Legacy Layout: via class names
+    const legacyCards = Array.from(document.querySelectorAll('.jobs-search-results-list__list-item, .job-card-container, [data-occludable-job-id]'));
+    for (const card of legacyCards) {
+      const text = card.innerText.toLowerCase();
+      const isApplied = text.includes('applied') || text.includes('application submitted');
+      const titleEl = card.querySelector('.job-card-list__title, a.job-card-container__link, strong');
+      const title = titleEl ? titleEl.innerText.trim() : '';
+      const compEl = card.querySelector('.job-card-container__primary-description');
+      const company = compEl ? compEl.innerText.trim() : '';
+      const key = (title + '::' + company).toLowerCase();
+
+      if (title && !visited.has(key) && !isApplied) {
         const link = card.querySelector('a.job-card-container__link, a[href*="/jobs/view/"], a');
         if (link) {
           link.scrollIntoView({ behavior: 'instant', block: 'center' });
           link.click();
-          return { found: true, title: link.innerText.trim() };
+          return { found: true, title, company, key };
         }
       }
     }
+
     return { found: false };
   })()`);
 }
 
+/**
+ * Universal Feed Scroller
+ * Scrolls the active left job listings container in both modern atomic & classic layouts.
+ */
 async function scrollFeedContainer(ws) {
   return await cdpEval(ws, `(() => {
-    const list = document.querySelector('.jobs-search-results-list, .jobs-search-results, div[data-view-name="job-search-results-list"], .scaffold-layout__list-detail');
-    if (list) {
-      list.scrollTop += 800;
+    // 1. Modern layout scroll container detection
+    const dismissBtn = document.querySelector('button[aria-label*="Dismiss"], button[aria-label*="dismiss"]');
+    let container = null;
+    if (dismissBtn) {
+      let p = dismissBtn.parentElement;
+      while (p && p.tagName !== 'BODY') {
+        if (p.scrollHeight > p.clientHeight + 100 && p.offsetHeight > 200) {
+          container = p;
+          break;
+        }
+        p = p.parentElement;
+      }
+    }
+
+    // 2. Legacy selectors fallback
+    if (!container) {
+      container = document.querySelector('.jobs-search-results-list, .jobs-search-results, div[data-view-name="job-search-results-list"], .scaffold-layout__list-detail');
+    }
+
+    if (container) {
+      container.scrollTop += 600;
+      container.dispatchEvent(new Event('scroll', { bubbles: true }));
       return true;
     }
-    window.scrollBy(0, 800);
+
+    window.scrollBy(0, 600);
     return false;
   })()`);
 }
 
+/**
+ * Universal Search Pagination Solver
+ * Finds and clicks the Next button or the next numeric page button (e.g. Page 1 -> 2 -> 3... 10+).
+ */
 async function goToNextSearchPage(ws) {
   return await cdpEval(ws, `(() => {
-    // 1. Next button in pagination
-    const nextBtn = document.querySelector('button[aria-label="View next page"], button[aria-label="Next"], .jobs-search-pagination__button--next')
-      || Array.from(document.querySelectorAll('button')).find(b => {
-        const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-        const txt = (b.innerText || '').toLowerCase().trim();
-        return (aria.includes('next page') || txt === 'next') && !b.disabled && b.offsetWidth > 0;
-      });
+    // 1. Next button
+    const nextBtns = Array.from(document.querySelectorAll('button, a[role="button"]')).filter(b => {
+      const t = b.innerText.trim().toLowerCase();
+      const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+      return (t === 'next' || aria === 'next' || aria.includes('next page') || b.classList.contains('jobs-search-pagination__button--next')) && !b.disabled && b.offsetWidth > 0;
+    });
 
-    if (nextBtn && !nextBtn.disabled) {
+    if (nextBtns.length > 0) {
+      const nextBtn = nextBtns[0];
       nextBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
+      nextBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      nextBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
       nextBtn.click();
       return { success: true };
     }
 
-    // 2. Next numeric page button (e.g. active is page 1, look for page 2)
-    const activePageBtn = document.querySelector('.jobs-search-pagination__indicator-button--active, [data-test-pagination-page-btn].active, button[aria-current="true"]');
-    if (activePageBtn) {
-      const activeNum = parseInt(activePageBtn.innerText.trim(), 10);
-      if (!isNaN(activeNum)) {
-        const targetPage = activeNum + 1;
-        const targetBtn = Array.from(document.querySelectorAll('button')).find(b => {
-          return b.innerText.trim() === String(targetPage) && !b.disabled && b.offsetWidth > 0;
-        });
-        if (targetBtn) {
-          targetBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
-          targetBtn.click();
-          return { success: true };
-        }
-      }
+    // 2. Numeric page buttons (e.g. Page 1 -> Page 2 -> Page 3...)
+    const pageBtns = Array.from(document.querySelectorAll('button, a[role="button"]')).filter(b => {
+      const aria = (b.getAttribute('aria-label') || '');
+      const t = b.innerText.trim();
+      return /Page\\s+\\d+/i.test(aria) || /^\\d+$/.test(t);
+    });
+
+    const activeBtn = pageBtns.find(b => b.getAttribute('aria-current') === 'true' || b.classList.contains('active') || b.parentElement?.classList.contains('active'));
+    const activeNum = activeBtn ? parseInt(activeBtn.innerText.trim() || activeBtn.getAttribute('aria-label')?.replace(/\\D/g, ''), 10) : 1;
+    const nextNum = activeNum + 1;
+    const targetBtn = pageBtns.find(b => {
+      const num = parseInt(b.innerText.trim() || b.getAttribute('aria-label')?.replace(/\\D/g, ''), 10);
+      return num === nextNum;
+    });
+
+    if (targetBtn && !targetBtn.disabled) {
+      targetBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
+      targetBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      targetBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+      targetBtn.click();
+      return { success: true };
     }
 
     return { success: false };
