@@ -13,14 +13,20 @@ const { cdpEval } = require('./cdp-client');
 
 async function ensureHudInjected(ws) {
   await cdpEval(ws, `(() => {
-    if (document.getElementById('biotailr-standby-hud')) return;
+    const existing = document.getElementById('biotailr-standby-hud');
+    const savedLeft = existing ? existing.style.left : '';
+    const savedTop = existing ? existing.style.top : '';
+    if (existing) {
+      existing.remove();
+    }
 
     const hud = document.createElement('div');
     hud.id = 'biotailr-standby-hud';
     hud.style.cssText = \`
       position: fixed;
-      top: 16px;
-      right: 16px;
+      top: \${savedTop || '16px'};
+      left: \${savedLeft || 'auto'};
+      right: \${savedLeft ? 'auto' : '16px'};
       width: 340px;
       max-width: calc(100vw - 32px);
       background: #ffffff;
@@ -38,8 +44,9 @@ async function ensureHudInjected(ws) {
 
     hud.innerHTML = \`
       <!-- Draggable Header -->
-      <div id="bt-hud-header" style="padding: 10px 14px; background: #f9fafb; border-bottom: 1px solid #e5e7eb; display: flex; align-items: center; justify-content: space-between; cursor: grab;">
+      <div id="bt-hud-header" style="padding: 10px 14px; background: #f9fafb; border-bottom: 1px solid #e5e7eb; display: flex; align-items: center; justify-content: space-between; cursor: grab; user-select: none;">
         <div style="display: flex; align-items: center; gap: 8px; pointer-events: none;">
+          <span style="display: inline-flex; align-items: center; color: #9ca3af; font-size: 14px; letter-spacing: 1px; font-weight: bold; cursor: grab; margin-right: 2px;" title="Drag StandBy HUD">⠿</span>
           <div id="bt-status-dot" style="width: 8px; height: 8px; border-radius: 50%; background: #9ca3af; box-shadow: 0 0 0 2px rgba(156, 163, 175, 0.2);"></div>
           <span style="font-weight: 700; color: #111827; letter-spacing: -0.2px;">BioTailr StandBy</span>
           <span id="bt-status-pill" style="font-size: 10px; font-weight: 600; text-transform: uppercase; background: #f3f4f6; color: #4b5563; border: 1px solid #d1d5db; padding: 2px 6px; border-radius: 4px;">STANDBY</span>
@@ -87,57 +94,92 @@ async function ensureHudInjected(ws) {
 
     document.body.appendChild(hud);
 
-    window.__bioTailrState = {
+    window.__bioTailrState = window.__bioTailrState || {
       isStarted: false,
       isPaused: false,
       logCount: 1
     };
 
-    // 1. Draggable implementation
-    const header = document.getElementById('bt-hud-header');
+    // 1. Draggable implementation across the entire HUD container (smooth 60fps, no transition lag)
     let isDragging = false;
-    let startX = 0, startY = 0;
-    let startLeft = 0, startTop = 0;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let initialX = 0;
+    let initialY = 0;
+    let dragOverlay = null;
 
-    header.addEventListener('mousedown', (e) => {
-      if (e.target.closest('button')) return; // ignore button clicks
+    hud.addEventListener('mousedown', (e) => {
+      // Ignore clicks on interactive controls, inputs, buttons, links, or the scrollable log stream
+      if (e.target.closest('button, input, textarea, select, a, #bt-log-stream, [role="button"]')) return;
+      if (e.button !== 0) return; // Only left mouse button
+
+      e.preventDefault();
       isDragging = true;
-      header.style.cursor = 'grabbing';
-      startX = e.clientX;
-      startY = e.clientY;
-      const rect = hud.getBoundingClientRect();
-      startLeft = rect.left;
-      startTop = rect.top;
+      hud.style.transition = 'none';
 
-      // Lock current position to left/top and remove right positioning
-      hud.style.left = startLeft + 'px';
-      hud.style.top = startTop + 'px';
+      const rect = hud.getBoundingClientRect();
+      initialX = rect.left;
+      initialY = rect.top;
+
+      hud.style.left = initialX + 'px';
+      hud.style.top = initialY + 'px';
       hud.style.right = 'auto';
+      hud.style.bottom = 'auto';
+
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+
+      hud.style.cursor = 'grabbing';
+      const headerEl = document.getElementById('bt-hud-header');
+      if (headerEl) headerEl.style.cursor = 'grabbing';
+
+      // Full-screen transparent overlay to guarantee 100% capture across iframes, ads, and rapid mouse moves
+      if (!dragOverlay) {
+        dragOverlay = document.createElement('div');
+        dragOverlay.id = 'bt-drag-glass-overlay';
+        dragOverlay.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:99999999;cursor:grabbing;user-select:none;background:transparent;';
+        document.body.appendChild(dragOverlay);
+      }
 
       const onMouseMove = (moveEv) => {
         if (!isDragging) return;
-        const dx = moveEv.clientX - startX;
-        const dy = moveEv.clientY - startY;
+        moveEv.preventDefault();
 
-        const maxLeft = window.innerWidth - hud.offsetWidth - 8;
-        const maxTop = window.innerHeight - hud.offsetHeight - 8;
+        const dx = moveEv.clientX - dragStartX;
+        const dy = moveEv.clientY - dragStartY;
 
-        const newLeft = Math.max(8, Math.min(maxLeft, startLeft + dx));
-        const newTop = Math.max(8, Math.min(maxTop, startTop + dy));
+        let newX = initialX + dx;
+        let newY = initialY + dy;
 
-        hud.style.left = newLeft + 'px';
-        hud.style.top = newTop + 'px';
+        // Allow dragging all over the screen, bounded safely by viewport
+        const minX = 0;
+        const maxX = Math.max(0, window.innerWidth - hud.offsetWidth);
+        const minY = 0;
+        const maxY = Math.max(0, window.innerHeight - hud.offsetHeight);
+
+        newX = Math.max(minX, Math.min(maxX, newX));
+        newY = Math.max(minY, Math.min(maxY, newY));
+
+        hud.style.left = newX + 'px';
+        hud.style.top = newY + 'px';
       };
 
       const onMouseUp = () => {
         isDragging = false;
-        header.style.cursor = 'grab';
-        window.removeEventListener('mousemove', onMouseMove);
-        window.removeEventListener('mouseup', onMouseUp);
+        hud.style.cursor = '';
+        if (headerEl) headerEl.style.cursor = 'grab';
+
+        if (dragOverlay && dragOverlay.parentNode) {
+          dragOverlay.parentNode.removeChild(dragOverlay);
+          dragOverlay = null;
+        }
+
+        window.removeEventListener('mousemove', onMouseMove, { capture: true });
+        window.removeEventListener('mouseup', onMouseUp, { capture: true });
       };
 
-      window.addEventListener('mousemove', onMouseMove);
-      window.addEventListener('mouseup', onMouseUp);
+      window.addEventListener('mousemove', onMouseMove, { capture: true, passive: false });
+      window.addEventListener('mouseup', onMouseUp, { capture: true });
     });
 
     // 2. Start / Pause Gate Controller

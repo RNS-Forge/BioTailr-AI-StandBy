@@ -190,7 +190,7 @@ async function applyJob4() {
           } else if (labelText.includes('headline')) {
             setVal(el, 'Generative AI & Full Stack Engineer');
           } else if (labelText.includes('income expectation')) {
-            setVal(el, '1,200,000 INR (12 LPA)');
+            setVal(el, '1200000');
           } else if (labelText.includes('organisation') || labelText.includes('organization') || labelText.includes('company')) {
             setVal(el, 'Axodian');
           } else if (labelText.includes('designation') || labelText.includes('title')) {
@@ -198,9 +198,9 @@ async function applyJob4() {
           } else if (labelText.includes('notice')) {
             setVal(el, '15');
           } else if (labelText.includes('current ctc') || labelText.includes('current salary')) {
-            setVal(el, '800,000 INR (8 LPA)');
+            setVal(el, '800000');
           } else if (labelText.includes('expected ctc') || labelText.includes('expected salary')) {
-            setVal(el, '1,200,000 INR (12 LPA)');
+            setVal(el, '1200000');
           } else if (labelText.includes('city') || labelText.includes('location') || labelText.includes('where')) {
             setVal(el, 'Coimbatore, Tamil Nadu, India');
           } else if (labelText.includes('linkedin')) {
