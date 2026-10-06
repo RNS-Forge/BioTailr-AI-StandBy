@@ -6,7 +6,69 @@
  * dropdown selection for Coimbatore location).
  */
 
+async function handleRemoveConfirmationDialog(ws, cdpEval) {
+  const removeInfo = await cdpEval(ws, `(() => {
+    const allModals = Array.from(document.querySelectorAll('dialog, [role="dialog"], .artdeco-modal, [data-test-modal]'));
+    for (const m of allModals) {
+      const text = (m.innerText || '').toLowerCase();
+      const isRemoveModal = text.includes('remove from your application')
+        || text.includes('remove from application')
+        || text.includes('this will not affect your linkedin profile')
+        || (text.includes('remove') && text.includes('cancel') && !m.querySelector('.jobs-easy-apply-form-section__grouping'));
+
+      if (isRemoveModal) {
+        const buttons = Array.from(m.querySelectorAll('button, a[role="button"], [role="button"]')).filter(b => b.offsetWidth > 0 || b.offsetHeight > 0);
+        const removeBtn = buttons.find(b => {
+          const t = (b.innerText || b.getAttribute('aria-label') || '').trim().toLowerCase();
+          return t === 'remove' || t.startsWith('remove') || b.classList.contains('artdeco-modal__confirm-dialog-btn') || b.hasAttribute('data-test-dialog-primary-btn');
+        });
+
+        if (removeBtn) {
+          removeBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
+          removeBtn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+          removeBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+          removeBtn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
+          removeBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+          removeBtn.click();
+          const r = removeBtn.getBoundingClientRect();
+          return { found: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+        }
+      }
+    }
+
+    const fallbackBtn = Array.from(document.querySelectorAll('.artdeco-modal button, [role="dialog"] button, .artdeco-modal__confirm-dialog-btn')).find(b => {
+      const t = (b.innerText || b.getAttribute('aria-label') || '').trim().toLowerCase();
+      return t === 'remove' && (b.offsetWidth > 0 || b.offsetHeight > 0);
+    });
+    if (fallbackBtn) {
+      fallbackBtn.click();
+      const r = fallbackBtn.getBoundingClientRect();
+      return { found: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+    }
+
+    return { found: false };
+  })()`);
+
+  if (removeInfo && removeInfo.found && removeInfo.x && removeInfo.y) {
+    ws.send(JSON.stringify({
+      id: Math.floor(Math.random() * 1000000),
+      method: 'Input.dispatchMouseEvent',
+      params: { type: 'mousePressed', x: removeInfo.x, y: removeInfo.y, button: 'left', clickCount: 1 }
+    }));
+    await new Promise(r => setTimeout(r, 40));
+    ws.send(JSON.stringify({
+      id: Math.floor(Math.random() * 1000000),
+      method: 'Input.dispatchMouseEvent',
+      params: { type: 'mouseReleased', x: removeInfo.x, y: removeInfo.y, button: 'left', clickCount: 1 }
+    }));
+    await new Promise(r => setTimeout(r, 300));
+    return true;
+  }
+  return false;
+}
+
 async function getLinkedInModalStatus(ws, cdpEval) {
+  await handleRemoveConfirmationDialog(ws, cdpEval);
   return await cdpEval(ws, `(() => {
     const modal = document.querySelector('dialog, [role="dialog"], .jobs-easy-apply-modal, .artdeco-modal');
     if (!modal) return { modalOpen: false };
@@ -148,10 +210,21 @@ async function solveFormFields(ws, cdpEval, profile) {
     if (deleteExpBtn) {
       deleteExpBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
       deleteExpBtn.click();
-      setTimeout(() => {
-        const confirmBtn = document.querySelector('.artdeco-modal__confirm-dialog-btn, button[data-control-name="confirm_delete"], button[data-test-dialog-primary-btn], [data-test-modal-close-btn]');
-        if (confirmBtn) confirmBtn.click();
-      }, 200);
+      const clickRemoveConfirm = () => {
+        const dialogs = Array.from(document.querySelectorAll('dialog, [role="dialog"], .artdeco-modal'));
+        for (const d of dialogs) {
+          const txt = (d.innerText || '').toLowerCase();
+          if (txt.includes('remove from your application') || txt.includes('this will not affect your linkedin profile') || (txt.includes('remove') && txt.includes('cancel'))) {
+            const btns = Array.from(d.querySelectorAll('button, [role="button"]')).filter(b => b.offsetWidth > 0 || b.offsetHeight > 0);
+            const removeBtn = btns.find(b => (b.innerText || b.getAttribute('aria-label') || '').trim().toLowerCase() === 'remove');
+            if (removeBtn) { removeBtn.click(); return true; }
+          }
+        }
+        return false;
+      };
+      setTimeout(clickRemoveConfirm, 80);
+      setTimeout(clickRemoveConfirm, 250);
+      setTimeout(clickRemoveConfirm, 500);
       return;
     }
 
@@ -183,10 +256,13 @@ async function solveFormFields(ws, cdpEval, profile) {
         || /years?|experience|duration|months?|days?|notice|salary|ctc|compensation|fixed|variable|lpa|lakh|phone|mobile|postal|zip|pin\s*code|percentage|gpa|cgpa|scale|rate|amount|number|count|quantity/i.test(labelText);
 
       if (isInput && (el.type === 'text' || !el.type || el.type === 'number' || el.type === 'tel' || el.type === 'email')) {
-        const isCityOrLocation = labelText.includes('city') || labelText.includes('location') || labelText.includes('residence') || isCombobox;
+        const isCityOrLocation = labelText.includes('city') || labelText.includes('location') || labelText.includes('residence') || labelText.includes('where') || labelText.includes('address') || isCombobox;
 
         if (isCityOrLocation) {
-          setVal(el, 'Coimbatore');
+          const fullLocationStr = 'Coimbatore, Tamil Nadu, India';
+          const isFullLocReq = !isCombobox && (labelText.includes('location') || labelText.includes('where') || labelText.includes('address'));
+          const fillVal = isFullLocReq ? fullLocationStr : (prof.personal?.city || 'Coimbatore');
+          setVal(el, fillVal);
           el.dispatchEvent(new Event('focus', { bubbles: true }));
           el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'e' }));
           el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'e' }));
@@ -397,6 +473,9 @@ async function solveFormFields(ws, cdpEval, profile) {
 }
 
 async function trySubmitLinkedInModal(ws, cdpEval) {
+  // Ensure "Remove from your application?" confirmation is cleared if open
+  await handleRemoveConfirmationDialog(ws, cdpEval);
+
   // Step 1: Attempt click on submit button inside modal
   const submitInfo = await cdpEval(ws, `(() => {
     const modal = document.querySelector('dialog, [role="dialog"], .jobs-easy-apply-modal, .artdeco-modal');
@@ -461,7 +540,6 @@ async function trySubmitLinkedInModal(ws, cdpEval) {
   }
 
   // Step 2: Verify that LinkedIn accepted the submission
-  // Either modal is closed, or confirmation screen is shown ("Your application was sent", etc.)
   let verified = false;
   for (let attempt = 0; attempt < 8; attempt++) {
     await new Promise(r => setTimeout(r, 600));
@@ -495,7 +573,6 @@ async function trySubmitLinkedInModal(ws, cdpEval) {
     }
 
     if (checkState?.status === 'SUBMIT_STILL_PRESENT' && attempt >= 3) {
-      // If submit button is still visible, the synthetic click may not have triggered LinkedIn's action
       break;
     }
   }
@@ -504,6 +581,9 @@ async function trySubmitLinkedInModal(ws, cdpEval) {
 }
 
 async function tryAdvanceLinkedInModal(ws, cdpEval) {
+  // First, check if "Remove from your application?" modal is open and clear it
+  await handleRemoveConfirmationDialog(ws, cdpEval);
+
   const advanceInfo = await cdpEval(ws, `(() => {
     const modal = document.querySelector('dialog, [role="dialog"], .jobs-easy-apply-modal, .artdeco-modal');
     if (!modal) return { found: false };
@@ -511,13 +591,11 @@ async function tryAdvanceLinkedInModal(ws, cdpEval) {
     // If unneeded draft experience card is open or errored, click Delete experience
     const deleteExpBtn = Array.from(modal.querySelectorAll('button, a[role="button"]')).find(b => {
       const t = (b.innerText || b.getAttribute('aria-label') || '').toLowerCase().trim();
-      return (t.includes('delete experience') || t === 'delete experience') && b.offsetWidth > 0;
+      return (t.includes('delete experience') || t === 'delete experience') && (b.offsetWidth > 0 || b.offsetHeight > 0);
     });
     if (deleteExpBtn) {
       deleteExpBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
       deleteExpBtn.click();
-      const confirmBtn = document.querySelector('.artdeco-modal__confirm-dialog-btn, button[data-control-name="confirm_delete"], button[data-test-dialog-primary-btn], [data-test-modal-close-btn]');
-      if (confirmBtn) confirmBtn.click();
       const r = deleteExpBtn.getBoundingClientRect();
       return { found: true, type: 'delete_experience', x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
     }
@@ -561,13 +639,17 @@ async function tryAdvanceLinkedInModal(ws, cdpEval) {
       method: 'Input.dispatchMouseEvent',
       params: { type: 'mouseReleased', x: advanceInfo.x, y: advanceInfo.y, button: 'left', clickCount: 1 }
     }));
+
     if (advanceInfo.type === 'delete_experience') {
+      // Wait for "Remove from your application?" modal to appear and click Remove
+      await new Promise(r => setTimeout(r, 400));
+      await handleRemoveConfirmationDialog(ws, cdpEval);
       await new Promise(r => setTimeout(r, 250));
-      await cdpEval(ws, `(() => {
-        const confirmBtn = document.querySelector('.artdeco-modal__confirm-dialog-btn, button[data-control-name="confirm_delete"], button[data-test-dialog-primary-btn], [data-test-modal-close-btn]');
-        if (confirmBtn) confirmBtn.click();
-      })()`);
+      await handleRemoveConfirmationDialog(ws, cdpEval);
+      return 'deleted_experience';
     }
+
+    await handleRemoveConfirmationDialog(ws, cdpEval);
     return advanceInfo.type;
   }
   return false;
@@ -759,6 +841,7 @@ async function discardIncompleteModal(ws, cdpEval) {
 
 module.exports = {
   getLinkedInModalStatus,
+  handleRemoveConfirmationDialog,
   handleProfilePrompt,
   handleSafetyReminder,
   pruneEducation,

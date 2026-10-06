@@ -9,6 +9,7 @@ const { scrollLinkedInFeed } = require('./feed-scroller');
 const { goToNextLinkedInPage } = require('./pagination');
 const {
   getLinkedInModalStatus,
+  handleRemoveConfirmationDialog,
   handleProfilePrompt,
   handleSafetyReminder,
   pruneEducation,
@@ -102,25 +103,32 @@ class LinkedInPlatform extends BasePlatform {
   }
 
   async getModalStatus() {
+    await handleRemoveConfirmationDialog(this.ws, this.cdpEval);
     await handleSafetyReminder(this.ws, this.cdpEval);
     return await getLinkedInModalStatus(this.ws, this.cdpEval);
   }
 
   async solveCurrentStep(stepNumber, stepStatus) {
-    // 1. Intercept profile update dialog if open
+    // 1. Intercept "Remove from your application?" modal if open
+    await handleRemoveConfirmationDialog(this.ws, this.cdpEval);
+
+    // 2. Intercept profile update dialog if open
     const promptHandled = await handleProfilePrompt(this.ws, this.cdpEval);
     if (promptHandled) {
       if (this.helpers.sleep) await this.helpers.sleep(350);
     }
 
-    // 2. Education pruning if education step
+    // 3. Education pruning if education step
     if (stepStatus && stepStatus.isEducation) {
       await pruneEducation(this.ws, this.cdpEval);
       if (this.helpers.sleep) await this.helpers.sleep(300);
     }
 
-    // 3. Solve all inputs, selects, radios, checkboxes, and sub-forms
+    // 4. Solve all inputs, selects, radios, checkboxes, and sub-forms
     await solveFormFields(this.ws, this.cdpEval, this.profile);
+
+    // 5. Check if delete experience triggered confirmation dialog and clear it
+    await handleRemoveConfirmationDialog(this.ws, this.cdpEval);
   }
 
   async trySubmit() {
