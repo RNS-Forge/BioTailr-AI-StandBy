@@ -36,6 +36,7 @@ class Orchestrator {
       page: 1,
       appliedCount: 0,
       failedCount: 0,
+      appliedJobs: [],
       failedJobs: [],
       jobTitle: 'Initializing...',
       company: this.platform.getName(),
@@ -48,27 +49,39 @@ class Orchestrator {
     let currentPage = 1;
     let hasMoreJobs = true;
 
-    while (jobIndex < this.batchTarget && hasMoreJobs) {
+    while (appliedJobs.length < this.batchTarget && hasMoreJobs) {
       jobIndex++;
       console.log(`\n----------------------------------------------------`);
       const targetLabel = this.batchTarget === Infinity ? 'Unlimited' : String(this.batchTarget);
-      log('BATCH', `[Job #${jobIndex} | Page ${currentPage} | Target: ${targetLabel}] Inspecting active job card...`);
+      log('BATCH', `[Applied: ${appliedJobs.length}/${targetLabel} | Inspected #${jobIndex} | Page ${currentPage}] Inspecting active job card...`);
       console.log(`----------------------------------------------------`);
 
       await ensureHudInjected(this.ws);
 
-      const jobInfo = await this.platform.inspectCurrentJob();
+      let jobInfo = await this.platform.inspectCurrentJob();
+      if (!jobInfo.hasEasyApply) {
+        await sleep(400);
+        const retryInfo = await this.platform.inspectCurrentJob();
+        if (retryInfo.hasEasyApply) {
+          jobInfo = retryInfo;
+        }
+      }
       log('INFO', `Target Job: "${jobInfo.title || 'Untitled'}" at "${jobInfo.company || 'Company'}"`);
       log('INFO', `Easy Apply Available: ${jobInfo.hasEasyApply}`);
 
       const currentKey = (jobInfo.title + '::' + jobInfo.company).toLowerCase();
       visitedJobKeys.add(currentKey);
-      if (jobInfo.title) visitedJobKeys.add(jobInfo.title.toLowerCase());
+      if (jobInfo.title) {
+        visitedJobKeys.add(jobInfo.title.toLowerCase());
+        visitedJobKeys.add(jobInfo.title.toLowerCase().replace(/^selected,?\s*/i, ''));
+      }
+      if (jobInfo.jobId) visitedJobKeys.add(String(jobInfo.jobId));
 
       await updateHud(this.ws, {
         page: currentPage,
         appliedCount: appliedJobs.length,
         failedCount: failedJobs.length,
+        appliedJobs: appliedJobs,
         failedJobs: failedJobs,
         jobTitle: jobInfo.title,
         company: jobInfo.company,
@@ -79,13 +92,15 @@ class Orchestrator {
         log('SKIP', 'Easy Apply button not present on current job card. Recording and moving to next listing...');
         failedJobs.push({
           title: jobInfo.title || 'Untitled Role',
-          company: jobInfo.company || 'Unknown Company'
+          company: jobInfo.company || 'Unknown Company',
+          reason: 'No Easy Apply button (External apply)'
         });
 
         await updateHud(this.ws, {
           page: currentPage,
           appliedCount: appliedJobs.length,
           failedCount: failedJobs.length,
+          appliedJobs: appliedJobs,
           failedJobs: failedJobs,
           jobTitle: jobInfo.title,
           company: jobInfo.company,
@@ -99,7 +114,7 @@ class Orchestrator {
           nextJob = await this.platform.selectNextJob(visitedJobKeys);
         }
         if (!nextJob || !nextJob.found) {
-          const paged = await this.platform.goToNextPage();
+          const paged = await this.platform.goToNextPage(currentPage + 1);
           if (paged.success) {
             currentPage++;
             log('PAGINATION', `Advanced to Search Results Page ${currentPage}. Loading fresh jobs...`);
@@ -127,20 +142,58 @@ class Orchestrator {
         });
 
         await this.platform.clickApplyButton();
-        await sleep(1500);
+        await sleep(700);
+
+        let preCheck = await this.platform.getModalStatus();
+        if (!preCheck || !preCheck.modalOpen) {
+          // Re-attempt click once in case of delayed DOM update
+          await this.platform.clickApplyButton();
+          await sleep(800);
+          preCheck = await this.platform.getModalStatus();
+        }
+
+        if (!preCheck || !preCheck.modalOpen) {
+          log('WARN', `Easy Apply modal did not open for "${jobInfo.title}". Marking as skipped.`);
+          failedJobs.push({
+            title: jobInfo.title || 'Technical Opportunity',
+            company: jobInfo.company || 'Target Company',
+            reason: 'Easy Apply modal did not open'
+          });
+          await updateHud(this.ws, {
+            page: currentPage,
+            appliedCount: appliedJobs.length,
+            failedCount: failedJobs.length,
+            appliedJobs: appliedJobs,
+            failedJobs: failedJobs,
+            jobTitle: jobInfo.title,
+            company: jobInfo.company,
+            status: 'Skipped - Modal Not Opened'
+          });
+          continue;
+        }
 
         let stepCount = 0;
         let submitted = false;
 
-        while (stepCount < 40) {
+        while (stepCount < 30) {
           stepCount++;
-          await sleep(400);
+          await sleep(250);
 
           const stepStatus = await this.platform.getModalStatus();
 
-          if (!stepStatus || !stepStatus.modalOpen) {
-            log('MODAL', 'Application modal closed. Verifying completion...');
+          if (stepStatus && stepStatus.isPostSubmit) {
+            log('POST_SUBMIT', 'Post-application confirmation dialog detected. Application submitted!');
+            await sleep(400);
+            await this.platform.dismissPostSubmit();
             submitted = true;
+            break;
+          }
+
+          if (!stepStatus || !stepStatus.modalOpen) {
+            if (submitted || stepCount > 1) {
+              log('MODAL', 'Application modal closed after completion.');
+              submitted = true;
+            }
             break;
           }
 
@@ -153,8 +206,7 @@ class Orchestrator {
           const submitClicked = await this.platform.trySubmit();
           if (submitClicked) {
             log('SUBMIT', 'Clicked "Submit application"!');
-
-            await sleep(1500);
+            await sleep(600);
             await this.platform.dismissPostSubmit();
             submitted = true;
             break;
@@ -164,9 +216,9 @@ class Orchestrator {
           const nextClicked = await this.platform.tryAdvance();
           if (nextClicked) {
             log('NAV', `Advanced past "${nextClicked}" step.`);
-            await sleep(600);
+            await sleep(350);
           } else {
-            await sleep(400);
+            await sleep(250);
           }
         }
 
@@ -176,13 +228,15 @@ class Orchestrator {
             index: jobIndex,
             title: jobInfo.title,
             company: jobInfo.company,
-            status: 'SUBMITTED'
+            status: 'SUBMITTED',
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
           });
         } else {
           log('WARN', `Could not finish submission for "${jobInfo.title}". Discarding draft to free screen...`);
           failedJobs.push({
             title: jobInfo.title || 'Untitled Role',
-            company: jobInfo.company || 'Unknown Company'
+            company: jobInfo.company || 'Unknown Company',
+            reason: 'Incomplete or unsubmitted steps'
           });
           if (this.platform.discardIncompleteModal) {
             await this.platform.discardIncompleteModal();
@@ -193,13 +247,14 @@ class Orchestrator {
           page: currentPage,
           appliedCount: appliedJobs.length,
           failedCount: failedJobs.length,
+          appliedJobs: appliedJobs,
           failedJobs: failedJobs,
           jobTitle: jobInfo.title,
           company: jobInfo.company,
           status: submitted ? 'Applied' : 'Discarded'
         });
 
-        await sleep(800);
+        await sleep(400);
         await this.platform.dismissPostSubmit();
       } catch (err) {
         log('WARN', `Error processing "${jobInfo.title}": ${err.message}. Advancing to next listing...`);
@@ -214,18 +269,20 @@ class Orchestrator {
       }
 
       // Transition to next job card or page
-      if (jobIndex < this.batchTarget) {
+      if (appliedJobs.length < this.batchTarget) {
         log('TRANSITION', 'Selecting next job card in search feed...');
         await updateHud(this.ws, {
           page: currentPage,
           appliedCount: appliedJobs.length,
           failedCount: failedJobs.length,
+          appliedJobs: appliedJobs,
           failedJobs: failedJobs,
           jobTitle: 'Finding next job...',
           company: 'Listings Feed',
           status: 'Scanning Cards'
         });
 
+        await this.platform.dismissPostSubmit();
         let nextJob = await this.platform.selectNextJob(visitedJobKeys);
 
         if (!nextJob || !nextJob.found) {
@@ -237,7 +294,7 @@ class Orchestrator {
 
         if (!nextJob || !nextJob.found) {
           log('PAGINATION', `Page ${currentPage} completed. Advancing to Page ${currentPage + 1}...`);
-          const paged = await this.platform.goToNextPage();
+          const paged = await this.platform.goToNextPage(currentPage + 1);
           if (paged.success) {
             currentPage++;
             log('PAGINATION', `Advanced to Search Results Page ${currentPage}. Loading fresh jobs...`);
@@ -259,12 +316,13 @@ class Orchestrator {
             page: currentPage,
             appliedCount: appliedJobs.length,
             failedCount: failedJobs.length,
+            appliedJobs: appliedJobs,
             failedJobs: failedJobs,
             jobTitle: nextJob.title,
             company: nextJob.company || 'Selected Job',
             status: 'Target Selected'
           });
-          await sleep(2000);
+          await sleep(800);
         } else {
           log('COMPLETE', 'Reached the end of all search result pages. All Easy Apply jobs processed!');
           hasMoreJobs = false;

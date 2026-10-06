@@ -14,9 +14,9 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
-async function getBrowserTabs(port = 9222) {
+function fetchTabsJson(host, port) {
   return new Promise((resolve, reject) => {
-    http.get(`http://127.0.0.1:${port}/json`, (res) => {
+    const req = http.get(`http://${host}:${port}/json`, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
@@ -26,10 +26,25 @@ async function getBrowserTabs(port = 9222) {
           reject(err);
         }
       });
-    }).on('error', (err) => {
-      reject(new Error(`Failed to connect to Chrome on port ${port}. Ensure Chrome was started with --remote-debugging-port=${port}. (${err.message})`));
+    });
+    req.on('error', reject);
+    req.setTimeout(2000, () => {
+      req.destroy();
+      reject(new Error('Connection timed out'));
     });
   });
+}
+
+async function getBrowserTabs(port = 9222) {
+  try {
+    return await fetchTabsJson('127.0.0.1', port);
+  } catch (err1) {
+    try {
+      return await fetchTabsJson('localhost', port);
+    } catch (err2) {
+      throw new Error(`Failed to connect to Chrome on port ${port}. Ensure Chrome was started with --remote-debugging-port=${port}. (${err1.message}; ${err2.message})`);
+    }
+  }
 }
 
 async function getTargetTab(port = 9222, urlKeywords = ['linkedin.com/jobs', 'indeed.com/jobs']) {
@@ -49,12 +64,27 @@ async function getTargetTab(port = 9222, urlKeywords = ['linkedin.com/jobs', 'in
 }
 
 async function connectWebSocket(webSocketDebuggerUrl) {
-  const ws = new WebSocket(webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => {
-    ws.onopen = resolve;
-    ws.onerror = reject;
-  });
-  return ws;
+  try {
+    const ws = new WebSocket(webSocketDebuggerUrl);
+    await new Promise((resolve, reject) => {
+      ws.onopen = resolve;
+      ws.onerror = reject;
+    });
+    return ws;
+  } catch (err) {
+    let altUrl = webSocketDebuggerUrl;
+    if (webSocketDebuggerUrl.includes('127.0.0.1')) {
+      altUrl = webSocketDebuggerUrl.replace('127.0.0.1', 'localhost');
+    } else if (webSocketDebuggerUrl.includes('localhost')) {
+      altUrl = webSocketDebuggerUrl.replace('localhost', '127.0.0.1');
+    }
+    const ws2 = new WebSocket(altUrl);
+    await new Promise((resolve, reject) => {
+      ws2.onopen = resolve;
+      ws2.onerror = reject;
+    });
+    return ws2;
+  }
 }
 
 function cdpEval(ws, expression, awaitPromise = false) {

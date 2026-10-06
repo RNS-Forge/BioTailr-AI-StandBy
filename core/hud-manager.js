@@ -1,10 +1,12 @@
 /**
  * BioTailr AI StandBy - HUD Manager
- * StandBy Metrics Counter & Failed Jobs Inspector directly inside Google Chrome via CDP.
+ * StandBy Metrics Counter & Applied/Failed Jobs Inspector directly inside Google Chrome via CDP.
  * Features:
  * - Big Number Display: Shows successful applied jobs count in prominent emerald typography.
- * - Single-Click Expansion: Clicking the StandBy tab opens/closes the failed jobs drawer.
- * - Failed Jobs Inspection: Lists company name and job role alone for all failed/skipped listings.
+ * - Single-Click Tab Switcher: Clicking Applied count or Failed badge opens the drawer to that exact list.
+ * - Interactive Dual Lists:
+ *     1. Applied Jobs List: Displays company name, job role, and submission time for each applied role.
+ *     2. Failed Jobs List: Displays company name, job role, and reason for each skipped/failed role.
  * - Zero Emojis, max 6px border-radius, clean slate & emerald theme (#059669).
  * - Smooth 60fps dragging anywhere across the screen.
  * - 100% immune to LinkedIn CSP / Trusted Types.
@@ -18,19 +20,20 @@ async function ensureHudInjected(ws) {
     window.__bioTailrState = window.__bioTailrState || {
       appliedCount: 0,
       failedCount: 0,
+      appliedJobs: [],
       failedJobs: [],
       jobTitle: 'Initializing...',
       company: 'LinkedIn Feed',
       status: 'ACTIVE'
     };
 
-    // 2. Remove any stale HUD instances
-    const staleHuds = document.querySelectorAll('#biotailr-agent-hud, #biotailr-standby-hud');
+    // 2. Remove any stale HUD instances and old extension HUD designs
+    const staleHuds = document.querySelectorAll('#biotailr-agent-hud, #biotailr-standby-hud, .bt-hud-panel, .bt-hud-pill');
     staleHuds.forEach(el => el.remove());
 
     // 3. Create Fresh StandBy HUD Container
     const host = document.createElement('div');
-    host.id = 'biotailr-agent-hud';
+    host.id = 'biotailr-standby-hud';
     host.style.position = 'fixed';
     host.style.bottom = '24px';
     host.style.right = '24px';
@@ -42,7 +45,7 @@ async function ensureHudInjected(ws) {
 
     const style = document.createElement('style');
     style.textContent = \`
-      #biotailr-agent-hud * {
+      #biotailr-standby-hud * {
         box-sizing: border-box;
       }
       .bt-standby-tab {
@@ -71,6 +74,10 @@ async function ensureHudInjected(ws) {
         justify-content: center;
         padding-right: 12px;
         border-right: 1px solid #e2e8f0;
+        cursor: pointer !important;
+      }
+      .bt-count-block:hover .bt-count-number {
+        transform: scale(1.05);
       }
       .bt-count-number {
         font-size: 26px;
@@ -79,6 +86,7 @@ async function ensureHudInjected(ws) {
         color: #059669;
         letter-spacing: -0.5px;
         font-variant-numeric: tabular-nums;
+        transition: transform 0.15s ease;
       }
       .bt-count-label {
         font-size: 9px;
@@ -135,7 +143,13 @@ async function ensureHudInjected(ws) {
         color: #64748b;
         border: 1px solid #cbd5e1;
         margin-left: 6px;
+        cursor: pointer !important;
         transition: all 0.15s ease;
+      }
+      .bt-failed-badge:hover {
+        background: #fee2e2 !important;
+        border-color: #fca5a5 !important;
+        color: #b91c1c !important;
       }
       .bt-failed-badge.has-failed {
         background: #fef2f2;
@@ -145,7 +159,7 @@ async function ensureHudInjected(ws) {
       .bt-details-drawer {
         display: none;
         flex-direction: column;
-        width: 380px;
+        width: 400px;
         background: #ffffff;
         border: 1px solid #e2e8f0;
         border-radius: 6px;
@@ -195,40 +209,56 @@ async function ensureHudInjected(ws) {
       }
       .bt-stat-box {
         background: #f8fafc;
-        border: 1px solid #e2e8f0;
+        border: 2px solid transparent;
         border-radius: 6px;
         padding: 8px 12px;
         display: flex;
         flex-direction: column;
         gap: 2px;
+        cursor: pointer !important;
+        transition: all 0.15s ease;
       }
       .bt-stat-box.success {
-        border-color: #a7f3d0;
         background: #f0fdf4;
+        border-color: #d1fae5;
+      }
+      .bt-stat-box.success.active {
+        border-color: #059669 !important;
+        box-shadow: 0 0 0 1px #059669;
+      }
+      .bt-stat-box.failed {
+        background: #fef2f2;
+        border-color: #fee2e2;
+      }
+      .bt-stat-box.failed.active {
+        border-color: #b91c1c !important;
+        box-shadow: 0 0 0 1px #b91c1c;
       }
       .bt-stat-val-big {
         font-size: 22px;
         font-weight: 800;
-        color: #059669;
         line-height: 1.1;
+      }
+      .bt-stat-box.success .bt-stat-val-big {
+        color: #059669;
       }
       .bt-stat-box.failed .bt-stat-val-big {
         color: #b91c1c;
       }
       .bt-stat-lbl {
         font-size: 10px;
-        font-weight: 600;
+        font-weight: 700;
         color: #64748b;
         text-transform: uppercase;
         letter-spacing: 0.5px;
       }
-      .bt-failed-section {
+      .bt-list-section {
         padding: 12px 16px;
         display: flex;
         flex-direction: column;
         gap: 8px;
       }
-      .bt-failed-heading {
+      .bt-section-heading {
         font-size: 11px;
         font-weight: 700;
         color: #475569;
@@ -238,15 +268,15 @@ async function ensureHudInjected(ws) {
         align-items: center;
         justify-content: space-between;
       }
-      .bt-failed-list {
-        max-height: 200px;
+      .bt-items-container {
+        max-height: 220px;
         overflow-y: auto;
         display: flex;
         flex-direction: column;
         gap: 6px;
         padding-right: 4px;
       }
-      .bt-failed-item {
+      .bt-job-item {
         background: #f8fafc;
         border: 1px solid #e2e8f0;
         border-radius: 6px;
@@ -254,15 +284,51 @@ async function ensureHudInjected(ws) {
         display: flex;
         flex-direction: column;
         gap: 2px;
+        transition: border-color 0.15s ease;
       }
-      .bt-failed-company {
+      .bt-job-item.success {
+        border-left: 3px solid #059669;
+      }
+      .bt-job-item.failed {
+        border-left: 3px solid #dc2626;
+      }
+      .bt-job-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .bt-job-company {
         font-size: 12px;
         font-weight: 700;
         color: #0f172a;
       }
-      .bt-failed-role {
+      .bt-job-tag-success {
+        font-size: 9px;
+        font-weight: 700;
+        padding: 2px 5px;
+        border-radius: 3px;
+        background: #d1fae5;
+        color: #065f46;
+        text-transform: uppercase;
+      }
+      .bt-job-tag-failed {
+        font-size: 9px;
+        font-weight: 700;
+        padding: 2px 5px;
+        border-radius: 3px;
+        background: #fee2e2;
+        color: #991b1b;
+        text-transform: uppercase;
+      }
+      .bt-job-role {
         font-size: 11px;
-        color: #475569;
+        color: #334155;
+      }
+      .bt-job-meta {
+        font-size: 10px;
+        color: #64748b;
+        margin-top: 1px;
       }
       .bt-empty-state {
         padding: 16px 12px;
@@ -308,54 +374,80 @@ async function ensureHudInjected(ws) {
     dHeader.appendChild(dTitle);
     dHeader.appendChild(dClose);
 
-    // Stats Grid
+    // Stats Grid / Tabs
     const statsGrid = document.createElement('div');
     statsGrid.className = 'bt-stats-grid';
 
     const statBoxSuccess = document.createElement('div');
-    statBoxSuccess.className = 'bt-stat-box success';
+    statBoxSuccess.className = 'bt-stat-box success active';
+    statBoxSuccess.id = 'bt-tab-applied-box';
     const valSuccess = document.createElement('div');
     valSuccess.className = 'bt-stat-val-big';
     valSuccess.id = 'bt-drawer-applied-val';
     valSuccess.textContent = '0';
     const lblSuccess = document.createElement('div');
     lblSuccess.className = 'bt-stat-lbl';
-    lblSuccess.textContent = 'Applied Successful';
+    lblSuccess.textContent = 'Applied (Click to view)';
     statBoxSuccess.appendChild(valSuccess);
     statBoxSuccess.appendChild(lblSuccess);
 
     const statBoxFailed = document.createElement('div');
     statBoxFailed.className = 'bt-stat-box failed';
+    statBoxFailed.id = 'bt-tab-failed-box';
     const valFailed = document.createElement('div');
     valFailed.className = 'bt-stat-val-big';
     valFailed.id = 'bt-drawer-failed-val';
     valFailed.textContent = '0';
     const lblFailed = document.createElement('div');
     lblFailed.className = 'bt-stat-lbl';
-    lblFailed.textContent = 'Failed / Skipped';
+    lblFailed.textContent = 'Failed (Click to view)';
     statBoxFailed.appendChild(valFailed);
     statBoxFailed.appendChild(lblFailed);
 
     statsGrid.appendChild(statBoxSuccess);
     statsGrid.appendChild(statBoxFailed);
 
-    // Failed Jobs Section
+    // View 1: Applied Jobs Section
+    const appliedSection = document.createElement('div');
+    appliedSection.className = 'bt-list-section';
+    appliedSection.id = 'bt-applied-view';
+
+    const appliedHeading = document.createElement('div');
+    appliedHeading.className = 'bt-section-heading';
+    appliedHeading.innerHTML = '<span>Applied Jobs List</span><span style="font-size:10px; font-weight:normal; color:#059669;">Company & Role</span>';
+
+    const appliedList = document.createElement('div');
+    appliedList.className = 'bt-items-container';
+    appliedList.id = 'bt-applied-list';
+
+    const emptyApplied = document.createElement('div');
+    emptyApplied.className = 'bt-empty-state';
+    emptyApplied.id = 'bt-empty-applied';
+    emptyApplied.textContent = 'No applied jobs yet in this session.';
+    appliedList.appendChild(emptyApplied);
+
+    appliedSection.appendChild(appliedHeading);
+    appliedSection.appendChild(appliedList);
+
+    // View 2: Failed Jobs Section
     const failedSection = document.createElement('div');
-    failedSection.className = 'bt-failed-section';
+    failedSection.className = 'bt-list-section';
+    failedSection.id = 'bt-failed-view';
+    failedSection.style.display = 'none';
 
     const failedHeading = document.createElement('div');
-    failedHeading.className = 'bt-failed-heading';
-    failedHeading.innerHTML = '<span>Failed / Skipped Jobs</span><span style="font-size:10px; font-weight:normal; color:#64748b;">Company & Job Role</span>';
+    failedHeading.className = 'bt-section-heading';
+    failedHeading.innerHTML = '<span>Failed / Skipped Jobs</span><span style="font-size:10px; font-weight:normal; color:#b91c1c;">Company & Reason</span>';
 
     const failedList = document.createElement('div');
-    failedList.className = 'bt-failed-list';
+    failedList.className = 'bt-items-container';
     failedList.id = 'bt-failed-list';
 
-    const emptyState = document.createElement('div');
-    emptyState.className = 'bt-empty-state';
-    emptyState.id = 'bt-empty-state';
-    emptyState.textContent = 'No failed applications yet. All jobs submitted successfully.';
-    failedList.appendChild(emptyState);
+    const emptyFailed = document.createElement('div');
+    emptyFailed.className = 'bt-empty-state';
+    emptyFailed.id = 'bt-empty-failed';
+    emptyFailed.textContent = 'No failed applications yet. All jobs submitted successfully.';
+    failedList.appendChild(emptyFailed);
 
     failedSection.appendChild(failedHeading);
     failedSection.appendChild(failedList);
@@ -368,6 +460,7 @@ async function ensureHudInjected(ws) {
 
     drawer.appendChild(dHeader);
     drawer.appendChild(statsGrid);
+    drawer.appendChild(appliedSection);
     drawer.appendChild(failedSection);
     drawer.appendChild(footer);
 
@@ -378,6 +471,8 @@ async function ensureHudInjected(ws) {
 
     const countBlock = document.createElement('div');
     countBlock.className = 'bt-count-block';
+    countBlock.id = 'bt-tab-applied-block';
+    countBlock.title = 'Click to view applied jobs';
     const countNumber = document.createElement('div');
     countNumber.className = 'bt-count-number';
     countNumber.id = 'bt-hud-count';
@@ -401,6 +496,7 @@ async function ensureHudInjected(ws) {
     const failedBadge = document.createElement('span');
     failedBadge.className = 'bt-failed-badge';
     failedBadge.id = 'bt-tab-failed-badge';
+    failedBadge.title = 'Click to view failed jobs';
     failedBadge.textContent = 'Failed: 0';
 
     infoHeader.appendChild(pulseDot);
@@ -410,7 +506,7 @@ async function ensureHudInjected(ws) {
     const statusSub = document.createElement('div');
     statusSub.className = 'bt-status-sub';
     statusSub.id = 'bt-status-sub';
-    statusSub.textContent = 'Click to view failed jobs';
+    statusSub.textContent = 'Click to view details';
 
     infoBlock.appendChild(infoHeader);
     infoBlock.appendChild(statusSub);
@@ -422,7 +518,44 @@ async function ensureHudInjected(ws) {
     host.appendChild(tab);
     document.body.appendChild(host);
 
-    // 6. Click Handler to toggle failed jobs drawer
+    // Tab switching helpers
+    const showAppliedTab = () => {
+      statBoxSuccess.classList.add('active');
+      statBoxFailed.classList.remove('active');
+      appliedSection.style.display = 'flex';
+      failedSection.style.display = 'none';
+      drawer.classList.add('open');
+    };
+
+    const showFailedTab = () => {
+      statBoxFailed.classList.add('active');
+      statBoxSuccess.classList.remove('active');
+      failedSection.style.display = 'flex';
+      appliedSection.style.display = 'none';
+      drawer.classList.add('open');
+    };
+
+    statBoxSuccess.onclick = (e) => {
+      e.stopPropagation();
+      showAppliedTab();
+    };
+
+    statBoxFailed.onclick = (e) => {
+      e.stopPropagation();
+      showFailedTab();
+    };
+
+    countBlock.onclick = (e) => {
+      e.stopPropagation();
+      showAppliedTab();
+    };
+
+    failedBadge.onclick = (e) => {
+      e.stopPropagation();
+      showFailedTab();
+    };
+
+    // Click Handler to toggle drawer
     let didDrag = false;
     tab.onclick = (e) => {
       if (didDrag) {
@@ -438,7 +571,7 @@ async function ensureHudInjected(ws) {
       drawer.classList.remove('open');
     };
 
-    // 7. Smooth Draggable Header / Tab Handle
+    // 6. Smooth Draggable Header / Tab Handle
     let isDragging = false;
     let dragStartX = 0;
     let dragStartY = 0;
@@ -446,7 +579,7 @@ async function ensureHudInjected(ws) {
     let initialBottom = 0;
 
     const startDrag = (e) => {
-      if (e.target.closest('button, .bt-drawer-close')) return;
+      if (e.target.closest('button, .bt-drawer-close, .bt-stat-box, .bt-failed-badge, .bt-count-block')) return;
       if (e.button !== 0) return;
 
       didDrag = false;
@@ -500,7 +633,7 @@ async function ensureHudInjected(ws) {
     dHeader.addEventListener('mousedown', startDrag);
     tab.addEventListener('mousedown', startDrag);
 
-    // 8. Global State Update Method
+    // 7. Global State Update Method
     window.__bioTailrUpdateHud = (data) => {
       const countEl = host.querySelector('#bt-hud-count');
       const drawerApplied = host.querySelector('#bt-drawer-applied-val');
@@ -508,9 +641,10 @@ async function ensureHudInjected(ws) {
       const failedBadgeEl = host.querySelector('#bt-tab-failed-badge');
       const statusSubEl = host.querySelector('#bt-status-sub');
       const currentFooter = host.querySelector('#bt-current-footer');
+      const appliedListEl = host.querySelector('#bt-applied-list');
       const failedListEl = host.querySelector('#bt-failed-list');
 
-      const applied = typeof data.appliedCount === 'number' ? data.appliedCount : 0;
+      const applied = typeof data.appliedCount === 'number' ? data.appliedCount : (data.appliedJobs ? data.appliedJobs.length : 0);
       const failed = typeof data.failedCount === 'number' ? data.failedCount : (data.failedJobs ? data.failedJobs.length : 0);
 
       if (countEl) countEl.innerText = String(applied);
@@ -529,7 +663,50 @@ async function ensureHudInjected(ws) {
         if (currentFooter) currentFooter.innerText = 'Active: ' + text;
       }
 
-      // Update failed jobs listing (Company Name & Job Role alone)
+      // Update Applied Jobs Listing
+      if (Array.isArray(data.appliedJobs) && appliedListEl) {
+        appliedListEl.innerHTML = '';
+        if (data.appliedJobs.length === 0) {
+          const empty = document.createElement('div');
+          empty.className = 'bt-empty-state';
+          empty.innerText = 'No applied jobs yet in this session.';
+          appliedListEl.appendChild(empty);
+        } else {
+          data.appliedJobs.forEach(item => {
+            const card = document.createElement('div');
+            card.className = 'bt-job-item success';
+
+            const row = document.createElement('div');
+            row.className = 'bt-job-row';
+
+            const comp = document.createElement('div');
+            comp.className = 'bt-job-company';
+            comp.innerText = item.company || 'Unknown Company';
+
+            const tag = document.createElement('span');
+            tag.className = 'bt-job-tag-success';
+            tag.innerText = 'Applied';
+
+            row.appendChild(comp);
+            row.appendChild(tag);
+
+            const role = document.createElement('div');
+            role.className = 'bt-job-role';
+            role.innerText = item.title || 'Unknown Role';
+
+            const meta = document.createElement('div');
+            meta.className = 'bt-job-meta';
+            meta.innerText = item.time ? 'Submitted at ' + item.time : 'Application Submitted';
+
+            card.appendChild(row);
+            card.appendChild(role);
+            card.appendChild(meta);
+            appliedListEl.appendChild(card);
+          });
+        }
+      }
+
+      // Update Failed Jobs Listing
       if (Array.isArray(data.failedJobs) && failedListEl) {
         failedListEl.innerHTML = '';
         if (data.failedJobs.length === 0) {
@@ -540,18 +717,33 @@ async function ensureHudInjected(ws) {
         } else {
           data.failedJobs.forEach(item => {
             const card = document.createElement('div');
-            card.className = 'bt-failed-item';
+            card.className = 'bt-job-item failed';
+
+            const row = document.createElement('div');
+            row.className = 'bt-job-row';
 
             const comp = document.createElement('div');
-            comp.className = 'bt-failed-company';
+            comp.className = 'bt-job-company';
             comp.innerText = item.company || 'Unknown Company';
 
+            const tag = document.createElement('span');
+            tag.className = 'bt-job-tag-failed';
+            tag.innerText = 'Skipped';
+
+            row.appendChild(comp);
+            row.appendChild(tag);
+
             const role = document.createElement('div');
-            role.className = 'bt-failed-role';
+            role.className = 'bt-job-role';
             role.innerText = item.title || 'Unknown Role';
 
-            card.appendChild(comp);
+            const meta = document.createElement('div');
+            meta.className = 'bt-job-meta';
+            meta.innerText = item.reason || 'Not Easy Apply';
+
+            card.appendChild(row);
             card.appendChild(role);
+            card.appendChild(meta);
             failedListEl.appendChild(card);
           });
         }
@@ -570,7 +762,7 @@ async function updateHud(ws, state) {
 }
 
 async function appendHudLog(ws, tag, message) {
-  // Maintained for backward compatibility
+  // Backward compatibility
 }
 
 async function isHudStarted(ws) {
@@ -585,6 +777,7 @@ async function resetHudToStandby(ws) {
   await updateHud(ws, {
     appliedCount: 0,
     failedCount: 0,
+    appliedJobs: [],
     failedJobs: [],
     jobTitle: 'Ready in StandBy',
     company: 'LinkedIn Feed',

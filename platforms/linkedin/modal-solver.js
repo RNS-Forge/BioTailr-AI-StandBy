@@ -14,8 +14,16 @@ async function getLinkedInModalStatus(ws, cdpEval) {
     const modalText = (modal.innerText || '').toLowerCase();
     const actionButtons = Array.from(modal.querySelectorAll('button')).filter(b => b.offsetWidth > 0).map(b => b.innerText.trim());
 
+    const isPostSubmit = modalText.includes('application was sent')
+      || modalText.includes('application sent')
+      || modalText.includes('your application was submitted')
+      || modalText.includes('next best action')
+      || modalText.includes('turn your resume into a profile')
+      || window.location.href.includes('/post-apply/');
+
     return {
       modalOpen: true,
+      isPostSubmit,
       title: modal.querySelector('h1, h2, h3, .jobs-easy-apply-modal__title')?.innerText?.trim(),
       buttons: actionButtons,
       isEducation: modalText.includes('education') && !modalText.includes('work experience'),
@@ -24,16 +32,54 @@ async function getLinkedInModalStatus(ws, cdpEval) {
   })()`);
 }
 
+async function handleSafetyReminder(ws, cdpEval) {
+  const contInfo = await cdpEval(ws, `(() => {
+    const contBtn = Array.from(document.querySelectorAll('button')).find(b => {
+      const t = (b.innerText || b.getAttribute('aria-label') || '').toLowerCase().trim();
+      return (t === 'continue applying' || t.includes('continue applying')) && b.offsetWidth > 0;
+    });
+    if (contBtn) {
+      contBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
+      contBtn.click();
+      const r = contBtn.getBoundingClientRect();
+      return { found: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+    }
+    return { found: false };
+  })()`);
+
+  if (contInfo && contInfo.found && contInfo.x && contInfo.y) {
+    ws.send(JSON.stringify({
+      id: Math.floor(Math.random() * 1000000),
+      method: 'Input.dispatchMouseEvent',
+      params: { type: 'mousePressed', x: contInfo.x, y: contInfo.y, button: 'left', clickCount: 1 }
+    }));
+    await new Promise(r => setTimeout(r, 40));
+    ws.send(JSON.stringify({
+      id: Math.floor(Math.random() * 1000000),
+      method: 'Input.dispatchMouseEvent',
+      params: { type: 'mouseReleased', x: contInfo.x, y: contInfo.y, button: 'left', clickCount: 1 }
+    }));
+    return true;
+  }
+  return false;
+}
+
 async function handleProfilePrompt(ws, cdpEval) {
+  const safetyClicked = await handleSafetyReminder(ws, cdpEval);
+  if (safetyClicked) return 'clicked_continue_applying';
+
   return await cdpEval(ws, `(() => {
     const dialogs = Array.from(document.querySelectorAll('dialog, [role="dialog"], .artdeco-modal'));
     for (const d of dialogs) {
       if (d.querySelector('.jobs-easy-apply-form-section__grouping')) continue;
       const txt = (d.innerText || '').toLowerCase();
-      if (txt.includes('update your profile') || txt.includes('save to your profile') || txt.includes('save changes') || txt.includes('continue applying') || txt.includes('remember this')) {
-        const contBtn = Array.from(d.querySelectorAll('button')).find(b => /continue applying|continue|save and continue/i.test(b.innerText.trim()));
-        if (contBtn) { contBtn.click(); return 'clicked_continue_applying'; }
-        const notNow = Array.from(d.querySelectorAll('button')).find(b => /not now|no thanks|no|close|dismiss/i.test(b.innerText.trim()))
+
+      // Prioritize Continue Applying on Job Search Safety Reminders or Apply confirmations
+      const contBtn = Array.from(d.querySelectorAll('button')).find(b => /continue applying|continue apply/i.test(b.innerText.trim()) && b.offsetWidth > 0);
+      if (contBtn) { contBtn.click(); return 'clicked_continue_applying'; }
+
+      if (txt.includes('update your profile') || txt.includes('update profile') || txt.includes('save to your profile') || txt.includes('save changes') || txt.includes('remember this') || txt.includes('next best action') || txt.includes('application sent') || txt.includes('application was sent')) {
+        const notNow = Array.from(d.querySelectorAll('button')).find(b => /not now|no thanks|no|close|dismiss|done/i.test(b.innerText.trim()))
           || d.querySelector('.artdeco-modal__dismiss, [data-test-modal-close-btn]');
         if (notNow) { notNow.click(); return 'dismissed_update_profile'; }
       }
@@ -73,7 +119,9 @@ async function pruneEducation(ws, cdpEval) {
 }
 
 async function solveFormFields(ws, cdpEval, profile) {
+  const serialized = JSON.stringify(profile || {});
   return await cdpEval(ws, `(() => {
+    const prof = ${serialized};
     const modal = document.querySelector('dialog, [role="dialog"], .jobs-easy-apply-modal, .artdeco-modal');
     if (!modal) return;
 
@@ -89,138 +137,138 @@ async function solveFormFields(ws, cdpEval, profile) {
       el.dispatchEvent(new Event('change', { bubbles: true }));
     };
 
-    // A. Resolve nested "Edit experience" sub-card / required field errors
-    const expHeaders = Array.from(modal.querySelectorAll('h3, h4, legend, .artdeco-modal__header')).filter(h => {
-      return /edit experience|add experience|work experience/i.test(h.innerText || '');
+    // A. Experience sub-card handling:
+    // Candidate's experience is already in their LinkedIn profile. We do not need to add new experience.
+    // If an unneeded experience sub-card was opened or encountered an error, click "Delete experience" and confirm.
+    const deleteExpBtn = Array.from(modal.querySelectorAll('button, a[role="button"]')).find(b => {
+      const t = (b.innerText || b.getAttribute('aria-label') || '').toLowerCase().trim();
+      return (t.includes('delete experience') || t === 'delete experience') && b.offsetWidth > 0;
     });
 
-    if (expHeaders.length > 0) {
-      const expInputs = Array.from(modal.querySelectorAll('input:not([type="hidden"]), select'));
-      expInputs.forEach(el => {
-        let p = el.parentElement;
-        let labelText = '';
-        for (let i = 0; i < 5; i++) {
-          if (!p || p === modal) break;
-          const lbl = p.querySelector('label');
-          if (lbl && lbl.innerText.trim()) { labelText = lbl.innerText.toLowerCase(); break; }
-          p = p.parentElement;
-        }
-        if (!labelText) labelText = (el.getAttribute('aria-label') || el.name || el.id || '').toLowerCase();
-
-        if (el.tagName === 'INPUT' && (el.type === 'text' || !el.type)) {
-          if (labelText.includes('title')) setVal(el, 'Full Stack & AI Engineer');
-          else if (labelText.includes('company')) setVal(el, 'Axodian');
-          else if (labelText.includes('location')) setVal(el, 'Coimbatore, Tamil Nadu, India');
-        } else if (el.tagName === 'SELECT') {
-          const opts = Array.from(el.options);
-          if (labelText.includes('month')) {
-            const idx = opts.findIndex(o => /january|jan|^1$/i.test(o.text.trim()));
-            if (idx !== -1) { el.selectedIndex = idx; el.dispatchEvent(new Event('change', { bubbles: true })); }
-          } else if (labelText.includes('year')) {
-            const idx = opts.findIndex(o => /2022|2021|2023/i.test(o.text.trim()));
-            if (idx !== -1) { el.selectedIndex = idx; el.dispatchEvent(new Event('change', { bubbles: true })); }
-          }
-        } else if (el.type === 'checkbox' && /current|currently work/i.test(labelText)) {
-          if (!el.checked) { el.click(); el.dispatchEvent(new Event('change', { bubbles: true })); }
-        }
-      });
-
-      // Click Save button on experience sub-form
-      const saveBtn = Array.from(modal.querySelectorAll('button')).find(b => {
-        const t = b.innerText.trim().toLowerCase();
-        return (t === 'save' || t === 'save changes') && b.offsetWidth > 0;
-      });
-      if (saveBtn) {
-        saveBtn.click();
-        return;
-      }
-
-      // Handle "Delete experience" if unable to save
-      const deleteBtn = Array.from(modal.querySelectorAll('button')).find(b => {
-        const t = b.innerText.trim().toLowerCase();
-        return (t.includes('delete experience') || t === 'delete') && b.offsetWidth > 0;
-      });
-      if (deleteBtn) {
-        deleteBtn.click();
-        setTimeout(() => {
-          const confirmBtn = document.querySelector('.artdeco-modal__confirm-dialog-btn, button[data-control-name="confirm_delete"], button[data-test-dialog-primary-btn]');
-          if (confirmBtn) confirmBtn.click();
-        }, 300);
-        return;
-      }
+    if (deleteExpBtn) {
+      deleteExpBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
+      deleteExpBtn.click();
+      setTimeout(() => {
+        const confirmBtn = document.querySelector('.artdeco-modal__confirm-dialog-btn, button[data-control-name="confirm_delete"], button[data-test-dialog-primary-btn], [data-test-modal-close-btn]');
+        if (confirmBtn) confirmBtn.click();
+      }, 200);
+      return;
     }
 
     // B. Standard Field Solver
-    const inputs = Array.from(modal.querySelectorAll('input:not([type="hidden"]), textarea, select'));
+    const elements = Array.from(modal.querySelectorAll('input:not([type="hidden"]), textarea, select'));
 
-    inputs.forEach(el => {
+    elements.forEach(el => {
       let p = el.parentElement;
       let labelText = '';
-      for (let i = 0; i < 5; i++) {
+      for (let i = 0; i < 6; i++) {
         if (!p || p === modal) break;
-        const lbl = p.querySelector('label');
+        const lbl = p.querySelector('label, [class*="label"], legend');
         if (lbl && lbl.innerText.trim()) { labelText = lbl.innerText.toLowerCase(); break; }
         p = p.parentElement;
       }
-      if (!labelText) labelText = (el.getAttribute('aria-label') || el.name || el.id || '').toLowerCase();
+      if (!labelText) labelText = (el.getAttribute('aria-label') || el.name || el.id || el.placeholder || '').toLowerCase();
 
       const isCombobox = el.getAttribute('role') === 'combobox'
         || el.classList.contains('search-basic-typeahead__input')
         || el.classList.contains('basic-typeahead__input')
         || Boolean(el.closest('[role="combobox"]'));
 
-      if (el.tagName === 'INPUT' && (el.type === 'text' || !el.type || el.type === 'number')) {
-        const isCityOrLocation = labelText.includes('city') || labelText.includes('location') || labelText.includes('address') || labelText.includes('residence') || labelText.includes('postal') || labelText.includes('zip') || isCombobox;
+      const isTextarea = el.tagName === 'TEXTAREA';
+      const isInput = el.tagName === 'INPUT';
+      const isSelect = el.tagName === 'SELECT';
+
+      // Detect if this field requires numeric-only input
+      const isNumericField = (isInput && (el.type === 'number' || el.inputMode === 'numeric'))
+        || /years?|experience|duration|months?|days?|notice|salary|ctc|compensation|fixed|variable|lpa|lakh|phone|mobile|postal|zip|pin\s*code|percentage|gpa|cgpa|scale|rate|amount|number|count|quantity/i.test(labelText);
+
+      if (isInput && (el.type === 'text' || !el.type || el.type === 'number' || el.type === 'tel' || el.type === 'email')) {
+        const isCityOrLocation = labelText.includes('city') || labelText.includes('location') || labelText.includes('residence') || isCombobox;
 
         if (isCityOrLocation) {
-          // Set location to Coimbatore and trigger typeahead event
           setVal(el, 'Coimbatore');
           el.dispatchEvent(new Event('focus', { bubbles: true }));
           el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'e' }));
           el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'e' }));
-        } else if (labelText.includes('first name') || labelText.includes('given name')) {
-          setVal(el, 'Sanjay');
-        } else if (labelText.includes('last name') || labelText.includes('family name') || labelText.includes('surname')) {
-          setVal(el, 'N');
-        } else if (labelText.includes('phone') || labelText.includes('mobile')) {
-          setVal(el, '9361599018');
-        } else if (labelText.includes('email')) {
-          setVal(el, '2005sanjaynrs@gmail.com');
-        } else if (labelText.includes('notice')) {
-          // Pure numbers only for notice period
-          setVal(el, '15');
-        } else if (labelText.includes('current ctc') || labelText.includes('current salary') || labelText.includes('fixed ctc')) {
-          // Strictly pure numbers: 800000 or 8 if LPA field
-          const isLpa = /lpa|lakh/i.test(labelText) || (el.maxLength > 0 && el.maxLength <= 4);
-          setVal(el, isLpa ? '8' : '800000');
-        } else if (labelText.includes('expected ctc') || labelText.includes('expected salary')) {
-          // Strictly pure numbers: 1200000 or 12 if LPA field
-          const isLpa = /lpa|lakh/i.test(labelText) || (el.maxLength > 0 && el.maxLength <= 4);
-          setVal(el, isLpa ? '12' : '1200000');
-        } else if (labelText.includes('experience') || labelText.includes('years') || labelText.includes('duration') || labelText.includes('python') || labelText.includes('fastapi') || labelText.includes('react') || labelText.includes('sql') || labelText.includes('ai') || labelText.includes('llm')) {
-          setVal(el, '2');
-        } else if (labelText.includes('organisation') || labelText.includes('organization') || labelText.includes('company')) {
-          setVal(el, 'Axodian');
-        } else if (labelText.includes('designation') || labelText.includes('title')) {
-          setVal(el, 'Full Stack & AI Engineer');
-        } else if (labelText.includes('linkedin')) {
-          setVal(el, 'https://www.linkedin.com/in/sanjay--n');
-        } else if (labelText.includes('github')) {
-          setVal(el, 'https://github.com/RNS-Forge');
-        } else if (labelText.includes('portfolio') || labelText.includes('website') || labelText.includes('other')) {
-          setVal(el, 'https://rns-forge.github.io/RNS_Professional_Profile/');
-        } else if (labelText.includes('summary') || labelText.includes('cover letter') || labelText.includes('tinkering') || labelText.includes('about')) {
-          setVal(el, '2+ years of hands-on experience developing scalable full-stack software, agentic AI pipelines, microservices, and modern web architectures at Axodian. Deeply proficient in Python, FastAPI, React, SQL, and LLM APIs.');
-        } else if (!el.value) {
-          if (/years|number|count|period/i.test(labelText)) {
-            setVal(el, '1');
-          } else if (el.tagName === 'TEXTAREA') {
-            setVal(el, 'Experienced in AI engineering, Python, React, and scalable backend services.');
+        } else if (isNumericField) {
+          // Strictly sanitize to digits only (e.g. "234as" -> "234")
+          let val = '';
+          if (labelText.includes('notice')) {
+            val = String(prof.experience?.noticePeriodDays || '15');
+          } else if (labelText.includes('current ctc') || labelText.includes('current salary') || labelText.includes('fixed ctc')) {
+            const isLpa = /lpa|lakh/i.test(labelText) || (el.maxLength > 0 && el.maxLength <= 4);
+            val = isLpa ? String(prof.experience?.currentSalaryLpa || '8') : String(prof.experience?.currentSalary || '800000');
+          } else if (labelText.includes('expected ctc') || labelText.includes('expected salary')) {
+            const isLpa = /lpa|lakh/i.test(labelText) || (el.maxLength > 0 && el.maxLength <= 4);
+            val = isLpa ? String(prof.experience?.expectedSalaryLpa || '12') : String(prof.experience?.expectedSalary || '1200000');
+          } else if (labelText.includes('phone') || labelText.includes('mobile')) {
+            val = String(prof.personal?.phone || '9361599018').replace(/\D/g, '');
+          } else if (labelText.includes('postal') || labelText.includes('zip') || labelText.includes('pin')) {
+            val = '641001';
+          } else if (labelText.includes('gpa') || labelText.includes('cgpa')) {
+            val = '8';
+          } else if (labelText.includes('percentage') || labelText.includes('percent')) {
+            val = '85';
           } else {
-            setVal(el, 'Experienced Software Engineer');
+            val = String(prof.experience?.totalYears || '2');
+          }
+          const sanitizedDigits = val.replace(/\D/g, '') || '2';
+          setVal(el, sanitizedDigits);
+        } else {
+          // Clean text input
+          if (labelText.includes('first name') || labelText.includes('given name')) {
+            setVal(el, prof.personal?.firstName || 'Sanjay');
+          } else if (labelText.includes('last name') || labelText.includes('family name') || labelText.includes('surname')) {
+            setVal(el, prof.personal?.lastName || 'N');
+          } else if (labelText.includes('full name')) {
+            setVal(el, prof.personal?.fullName || 'Sanjay N');
+          } else if (labelText.includes('email')) {
+            setVal(el, prof.personal?.email || '2005sanjaynrs@gmail.com');
+          } else if (labelText.includes('organisation') || labelText.includes('organization') || labelText.includes('company')) {
+            setVal(el, prof.experience?.currentCompany || 'Axodian');
+          } else if (labelText.includes('designation') || labelText.includes('title') || labelText.includes('role')) {
+            setVal(el, prof.experience?.currentTitle || 'Full Stack & AI Engineer');
+          } else if (labelText.includes('linkedin')) {
+            setVal(el, prof.personal?.linkedinUrl || 'https://www.linkedin.com/in/sanjay--n');
+          } else if (labelText.includes('github')) {
+            setVal(el, prof.personal?.githubUrl || 'https://github.com/RNS-Forge');
+          } else if (labelText.includes('portfolio') || labelText.includes('website') || labelText.includes('other')) {
+            setVal(el, prof.personal?.portfolioUrl || 'https://rns-forge.github.io/RNS_Professional_Profile/');
+          } else if (labelText.includes('college') || labelText.includes('university') || labelText.includes('institution') || labelText.includes('school')) {
+            setVal(el, prof.education?.institution || 'Anna University / SNS College of Technology');
+          } else if (labelText.includes('degree') || labelText.includes('qualification')) {
+            setVal(el, prof.education?.degree || 'Bachelor of Technology - BTech');
+          } else if (labelText.includes('major') || labelText.includes('field of study')) {
+            setVal(el, prof.education?.fieldOfStudy || 'Computer Science and Engineering');
+          } else if (labelText.includes('country')) {
+            setVal(el, 'India');
+          } else if (labelText.includes('state')) {
+            setVal(el, 'Tamil Nadu');
+          } else if (labelText.includes('skill') || labelText.includes('tools') || labelText.includes('tech stack')) {
+            setVal(el, 'Python, FastAPI, React, Node.js, SQL, PostgreSQL, LLMs, Docker, Git');
+          } else {
+            // Avoid gibberish like 234as in text inputs
+            if (!el.value || /\d{2,}[a-z]+|[a-z]+\d{2,}/i.test(el.value)) {
+              setVal(el, 'Full Stack & AI Engineer');
+            }
           }
         }
-      } else if (el.tagName === 'SELECT') {
+      } else if (isTextarea) {
+        // Open-ended questions & Cover letters answered as Sanjay N
+        if (/cover\s*letter|message|note\s*to|letter/i.test(labelText)) {
+          setVal(el, 'Dear Hiring Team,\\n\\nI am writing to express my strong enthusiasm for this role. With 2 years of hands-on experience as a Full Stack & AI Engineer at Axodian, I build agentic AI pipelines, LLM-powered systems, scalable backends using Python and FastAPI, and responsive React web applications. I take ownership of architecting reliable production solutions that solve real problems. I would love the opportunity to contribute my skills to your team.\\n\\nBest regards,\\nSanjay N\\n2005sanjaynrs@gmail.com | +91 9361599018');
+        } else if (/why.*(hire|work|join|fit|company|us)|interest/i.test(labelText)) {
+          setVal(el, 'As a Full Stack & AI Engineer with 2 years of experience at Axodian, I bring proven expertise in Python, React, and LLM integrations. I am excited to apply my problem-solving ability, rapid learning mindset, and technical background to create high-impact products with your engineering team.');
+        } else if (/project|achievement|accomplish|describe.*experience/i.test(labelText)) {
+          setVal(el, 'At Axodian, I developed production AI agent workflows and full-stack web platforms using Python, FastAPI, React, and SQL. I focused on building resilient inference pipelines, robust API integrations, and low-latency database queries.');
+        } else if (/relocat|remote|hybrid|travel|commute/i.test(labelText)) {
+          setVal(el, 'Yes, I am fully open to remote, hybrid, or on-site arrangements and comfortable with relocation.');
+        } else if (/summary|about\s*(yourself|you)|bio/i.test(labelText)) {
+          setVal(el, 'Full Stack & AI Engineer with 2+ years of experience building production AI workflows, full-stack web applications, and backend services. Proficient in Python, FastAPI, React, SQL, LLM toolchains, and cloud deployments.');
+        } else if (!el.value || /\d{2,}[a-z]+|[a-z]+\d{2,}/i.test(el.value)) {
+          setVal(el, 'Experienced Full Stack & AI Engineer with 2+ years developing scalable applications in Python, React, and generative AI.');
+        }
+      } else if (isSelect) {
         const opts = Array.from(el.options);
         let matchIdx = -1;
         if (/additional\s*month/i.test(labelText)) {
@@ -229,23 +277,26 @@ async function solveFormFields(ws, cdpEval, profile) {
           matchIdx = opts.findIndex(o => /january|jan|^1$/i.test(o.text.trim()));
           if (matchIdx === -1 && opts.length > 1) matchIdx = 1;
         } else if (/year/i.test(labelText)) {
-          matchIdx = opts.findIndex(o => /2022|2021|2023/i.test(o.text));
+          matchIdx = opts.findIndex(o => /2022|2021|2023|2026/i.test(o.text));
+          if (matchIdx === -1 && opts.length > 1) matchIdx = 1;
+        } else if (/proficiency|skill\s*level|knowledge/i.test(labelText)) {
+          matchIdx = opts.findIndex(o => /expert|advanced|intermediate|proficient/i.test(o.text.trim()));
           if (matchIdx === -1 && opts.length > 1) matchIdx = 1;
         } else {
-          matchIdx = opts.findIndex(o => o.text.trim().toLowerCase() === 'yes' || o.text.includes('Yes'));
+          matchIdx = opts.findIndex(o => /^(yes|agree|accept|confirm|true)$/i.test(o.text.trim()) || o.text.includes('Yes'));
         }
         if (matchIdx !== -1 && el.selectedIndex !== matchIdx) {
           el.selectedIndex = matchIdx;
           el.dispatchEvent(new Event('change', { bubbles: true }));
         }
       } else if (el.type === 'radio') {
-        let p = el.parentElement;
+        let parentBox = el.parentElement;
         let radioText = '';
-        while (p && p.tagName !== 'FIELDSET' && p.tagName !== 'FORM') {
-          if (p.innerText && p.innerText.trim()) { radioText = p.innerText.trim(); break; }
-          p = p.parentElement;
+        while (parentBox && parentBox.tagName !== 'FIELDSET' && parentBox.tagName !== 'FORM') {
+          if (parentBox.innerText && parentBox.innerText.trim()) { radioText = parentBox.innerText.trim(); break; }
+          parentBox = parentBox.parentElement;
         }
-        const isNo = /sponsorship|require.*visa/i.test(labelText + ' ' + radioText);
+        const isNo = /sponsorship|require.*visa|criminal|disability|terminated/i.test(labelText + ' ' + radioText);
         const target = isNo ? /no|decline/i : /yes|agree|accept|confirm/i;
         if (target.test(radioText.toLowerCase()) || target.test(el.value.toLowerCase())) {
           if (!el.checked) {
@@ -281,7 +332,7 @@ async function solveFormFields(ws, cdpEval, profile) {
     }
 
     // D. Validation Error Auto-Correction Pass
-    // Detects any input marked invalid and sanitizes it strictly to numbers or clean text
+    // Strips invalid alphanumeric formats like "234as" to pure digits "234" for numeric fields
     const errorMessages = Array.from(modal.querySelectorAll('.artdeco-inline-feedback--error, [data-test-form-element-error-messages], .fb-form-element__error-text'));
     const invalidInputs = Array.from(modal.querySelectorAll('input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="true"]'));
 
@@ -309,35 +360,36 @@ async function solveFormFields(ws, cdpEval, profile) {
       }
       if (!labelText) labelText = (el.getAttribute('aria-label') || el.name || el.id || '').toLowerCase();
 
-      // Check if it is a salary/CTC field
-      if (/ctc|salary|package|compensation|remuneration/i.test(labelText)) {
-        const curVal = el.value || '';
-        // If current value contains non-digits, strip them immediately
-        if (/\D/.test(curVal)) {
-          const onlyDigits = curVal.replace(/\D/g, '');
-          setVal(el, onlyDigits || (labelText.includes('expected') ? '1200000' : '800000'));
-        } else {
-          // If pure numbers failed, it might be an LPA field (e.g. 8 or 12) or vice-versa
-          if (curVal === '800000' || curVal.length > 4) {
-            setVal(el, '8');
-          } else if (curVal === '1200000' || curVal.length > 4) {
-            setVal(el, '12');
-          } else if (curVal === '8') {
-            setVal(el, '800000');
-          } else if (curVal === '12') {
-            setVal(el, '1200000');
-          }
+      const isNumeric = el.type === 'number' || /salary|ctc|notice|experience|year|month|day|phone|postal|zip|pin/i.test(labelText);
+
+      if (isNumeric) {
+        // Strip out any non-digits like "234as" -> "234"
+        const current = el.value || '';
+        let digits = current.replace(/\D/g, '');
+
+        if (/salary|ctc/i.test(labelText)) {
+          if (digits === '800000') digits = '8';
+          else if (digits === '1200000') digits = '12';
+          else if (digits === '8') digits = '800000';
+          else if (digits === '12') digits = '1200000';
+          else digits = labelText.includes('expected') ? '12' : '8';
+        } else if (/notice/i.test(labelText)) {
+          digits = '15';
+        } else if (/experience|year/i.test(labelText)) {
+          digits = '2';
+        } else if (/phone|mobile/i.test(labelText)) {
+          digits = '9361599018';
+        } else if (!digits) {
+          digits = '1';
         }
-      } else if (/notice/i.test(labelText)) {
-        setVal(el, '15');
-      } else if (/experience|year|count|month/i.test(labelText)) {
-        setVal(el, '2');
-      } else if (/city|location|address/i.test(labelText)) {
-        setVal(el, 'Coimbatore');
-      } else if (el.type === 'number' || (el.value && /^\d+/.test(el.value))) {
-        // Any numeric field with error: sanitize to pure digits
-        const digits = (el.value || '').replace(/\D/g, '') || '1';
         setVal(el, digits);
+      } else {
+        // Text field error: replace any invalid alphanumeric strings with valid label answers
+        if (el.tagName === 'TEXTAREA') {
+          setVal(el, 'Experienced Full Stack & AI Engineer with 2+ years developing scalable applications in Python, React, and generative AI.');
+        } else {
+          setVal(el, 'Full Stack & AI Engineer');
+        }
       }
       el.dispatchEvent(new Event('blur', { bubbles: true }));
     });
@@ -393,6 +445,21 @@ async function trySubmitLinkedInModal(ws, cdpEval) {
     return false;
   }
 
+  if (submitInfo.x && submitInfo.y) {
+    ws.send(JSON.stringify({
+      id: Math.floor(Math.random() * 1000000),
+      method: 'Input.dispatchMouseEvent',
+      params: { type: 'mousePressed', x: submitInfo.x, y: submitInfo.y, button: 'left', clickCount: 1 }
+    }));
+    setTimeout(() => {
+      ws.send(JSON.stringify({
+        id: Math.floor(Math.random() * 1000000),
+        method: 'Input.dispatchMouseEvent',
+        params: { type: 'mouseReleased', x: submitInfo.x, y: submitInfo.y, button: 'left', clickCount: 1 }
+      }));
+    }, 40);
+  }
+
   // Step 2: Verify that LinkedIn accepted the submission
   // Either modal is closed, or confirmation screen is shown ("Your application was sent", etc.)
   let verified = false;
@@ -437,74 +504,263 @@ async function trySubmitLinkedInModal(ws, cdpEval) {
 }
 
 async function tryAdvanceLinkedInModal(ws, cdpEval) {
-  return await cdpEval(ws, `(() => {
+  const advanceInfo = await cdpEval(ws, `(() => {
     const modal = document.querySelector('dialog, [role="dialog"], .jobs-easy-apply-modal, .artdeco-modal');
-    if (!modal) return false;
+    if (!modal) return { found: false };
+
+    // If unneeded draft experience card is open or errored, click Delete experience
+    const deleteExpBtn = Array.from(modal.querySelectorAll('button, a[role="button"]')).find(b => {
+      const t = (b.innerText || b.getAttribute('aria-label') || '').toLowerCase().trim();
+      return (t.includes('delete experience') || t === 'delete experience') && b.offsetWidth > 0;
+    });
+    if (deleteExpBtn) {
+      deleteExpBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
+      deleteExpBtn.click();
+      const confirmBtn = document.querySelector('.artdeco-modal__confirm-dialog-btn, button[data-control-name="confirm_delete"], button[data-test-dialog-primary-btn], [data-test-modal-close-btn]');
+      if (confirmBtn) confirmBtn.click();
+      const r = deleteExpBtn.getBoundingClientRect();
+      return { found: true, type: 'delete_experience', x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+    }
 
     const reviewBtn = Array.from(modal.querySelectorAll('button')).find(b => /review/i.test(b.innerText.trim()) && b.offsetWidth > 0);
-    if (reviewBtn) { reviewBtn.click(); return 'review'; }
+    if (reviewBtn) {
+      reviewBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
+      reviewBtn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+      reviewBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      reviewBtn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
+      reviewBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+      reviewBtn.click();
+      const r = reviewBtn.getBoundingClientRect();
+      return { found: true, type: 'review', x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+    }
 
     const nextBtn = Array.from(modal.querySelectorAll('button')).find(b => /next|continue/i.test(b.innerText.trim()) && b.offsetWidth > 0);
-    if (nextBtn) { nextBtn.click(); return 'next'; }
+    if (nextBtn) {
+      nextBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
+      nextBtn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+      nextBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      nextBtn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
+      nextBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+      nextBtn.click();
+      const r = nextBtn.getBoundingClientRect();
+      return { found: true, type: 'next', x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+    }
 
-    return false;
+    return { found: false };
   })()`);
+
+  if (advanceInfo && advanceInfo.found && advanceInfo.x && advanceInfo.y) {
+    ws.send(JSON.stringify({
+      id: Math.floor(Math.random() * 1000000),
+      method: 'Input.dispatchMouseEvent',
+      params: { type: 'mousePressed', x: advanceInfo.x, y: advanceInfo.y, button: 'left', clickCount: 1 }
+    }));
+    await new Promise(r => setTimeout(r, 40));
+    ws.send(JSON.stringify({
+      id: Math.floor(Math.random() * 1000000),
+      method: 'Input.dispatchMouseEvent',
+      params: { type: 'mouseReleased', x: advanceInfo.x, y: advanceInfo.y, button: 'left', clickCount: 1 }
+    }));
+    if (advanceInfo.type === 'delete_experience') {
+      await new Promise(r => setTimeout(r, 250));
+      await cdpEval(ws, `(() => {
+        const confirmBtn = document.querySelector('.artdeco-modal__confirm-dialog-btn, button[data-control-name="confirm_delete"], button[data-test-dialog-primary-btn], [data-test-modal-close-btn]');
+        if (confirmBtn) confirmBtn.click();
+      })()`);
+    }
+    return advanceInfo.type;
+  }
+  return false;
 }
 
 async function dismissPostSubmitDialogs(ws, cdpEval) {
-  return await cdpEval(ws, `(() => {
-    // 1. Check for "Not now" button on the post-submit prompt
-    const notNowBtn = Array.from(document.querySelectorAll('button')).find(b => /not now/i.test(b.innerText.trim()) && b.offsetWidth > 0);
-    if (notNowBtn) {
-      notNowBtn.click();
-      return 'dismissed_not_now';
-    }
+  for (let round = 0; round < 3; round++) {
+    const dialogAction = await cdpEval(ws, `(() => {
+      const dialogs = Array.from(document.querySelectorAll('dialog, [role="dialog"], .artdeco-modal, .artdeco-modal-overlay, div[class*="artdeco-modal"]'));
 
-    // 2. Check for standard dismissal buttons
-    for (let d = 0; d < 3; d++) {
-      const dismissBtn = document.querySelector('.artdeco-modal__dismiss, [data-test-modal-close-btn], button[aria-label="Dismiss"], button[aria-label="Done"]')
-        || Array.from(document.querySelectorAll('button')).find(b => b.offsetWidth > 0 && /^(not now|dismiss|close|done)$/i.test(b.innerText.trim()));
-      if (dismissBtn) {
-        dismissBtn.click();
-        const discardBtn = document.querySelector('[data-control-name="discard_application_confirm_btn"], button[data-test-dialog-primary-btn]')
-          || Array.from(document.querySelectorAll('button')).find(b => /discard/i.test(b.innerText.trim()) && b.offsetWidth > 0);
-        if (discardBtn) discardBtn.click();
+      for (const d of dialogs) {
+        // Guard: Do not dismiss active Easy Apply form with inputs
+        if (d.querySelector('.jobs-easy-apply-form-section__grouping, .jobs-easy-apply-modal__content form')) {
+          continue;
+        }
+
+        const txt = (d.innerText || '').toLowerCase();
+        const isPostSubmitPrompt = 
+          txt.includes('turn your resume into a profile') ||
+          txt.includes('recruiters notice') ||
+          txt.includes('keep track of your application') ||
+          txt.includes('application was sent') ||
+          txt.includes('application sent') ||
+          txt.includes('save to your profile') ||
+          txt.includes('update your profile') ||
+          txt.includes('update profile') ||
+          txt.includes('job alert') ||
+          txt.includes('rate your application') ||
+          txt.includes('how was your experience') ||
+          txt.includes('remember this') ||
+          txt.includes('next best action') ||
+          txt.includes('feedback');
+
+        if (isPostSubmitPrompt) {
+          // Priority 1: Top-Right "X" Close Button (Image 2)
+          const closeBtn = d.querySelector('button[aria-label="Dismiss"], button[aria-label="Close"], button[aria-label*="dismiss" i], button[aria-label*="close" i], .artdeco-modal__dismiss, [data-test-modal-close-btn]')
+            || Array.from(d.querySelectorAll('button')).find(b => {
+              const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+              return aria === 'dismiss' || aria === 'close' || b.querySelector('svg#cancel-small, svg[id*="cancel"], svg[id*="close"]');
+            });
+
+          if (closeBtn && closeBtn.offsetWidth > 0) {
+            closeBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
+            const r = closeBtn.getBoundingClientRect();
+            closeBtn.click();
+            return {
+              found: true,
+              type: 'close_x_button',
+              x: Math.round(r.left + r.width / 2),
+              y: Math.round(r.top + r.height / 2)
+            };
+          }
+
+          // Priority 2: "Not now" button
+          const notNowBtn = Array.from(d.querySelectorAll('button')).find(b => {
+            const t = b.innerText.trim().toLowerCase();
+            return (t === 'not now' || t === 'no thanks' || t === 'done' || t === 'dismiss' || t === 'close' || t === 'no') && b.offsetWidth > 0;
+          });
+
+          if (notNowBtn) {
+            notNowBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
+            const r = notNowBtn.getBoundingClientRect();
+            notNowBtn.click();
+            return {
+              found: true,
+              type: 'not_now_button',
+              x: Math.round(r.left + r.width / 2),
+              y: Math.round(r.top + r.height / 2)
+            };
+          }
+        }
       }
+
+      // 2. Any overlay dialog close button outside active form
+      const anyCloseX = document.querySelector('.artdeco-modal:not(:has(.jobs-easy-apply-form-section__grouping)) button[aria-label="Dismiss"], .artdeco-modal:not(:has(.jobs-easy-apply-form-section__grouping)) button[aria-label="Close"], .artdeco-modal:not(:has(.jobs-easy-apply-form-section__grouping)) .artdeco-modal__dismiss, button[data-test-modal-close-btn]');
+      if (anyCloseX && anyCloseX.offsetWidth > 0) {
+        anyCloseX.scrollIntoView({ behavior: 'instant', block: 'center' });
+        const r = anyCloseX.getBoundingClientRect();
+        anyCloseX.click();
+        return {
+          found: true,
+          type: 'generic_close_x',
+          x: Math.round(r.left + r.width / 2),
+          y: Math.round(r.top + r.height / 2)
+        };
+      }
+
+      // 3. Any "Not now" button outside active form
+      const anyNotNow = Array.from(document.querySelectorAll('button')).find(b => {
+        if (b.closest('.jobs-easy-apply-form-section__grouping')) return false;
+        const t = b.innerText.trim().toLowerCase();
+        return (t === 'not now' || t === 'no thanks') && b.offsetWidth > 0;
+      });
+      if (anyNotNow) {
+        const r = anyNotNow.getBoundingClientRect();
+        anyNotNow.click();
+        return {
+          found: true,
+          type: 'generic_not_now',
+          x: Math.round(r.left + r.width / 2),
+          y: Math.round(r.top + r.height / 2)
+        };
+      }
+
+      return { found: false };
+    })()`);
+
+    if (dialogAction && dialogAction.found && dialogAction.x && dialogAction.y) {
+      ws.send(JSON.stringify({
+        id: Math.floor(Math.random() * 1000000),
+        method: 'Input.dispatchMouseEvent',
+        params: { type: 'mousePressed', x: dialogAction.x, y: dialogAction.y, button: 'left', clickCount: 1 }
+      }));
+      await new Promise(r => setTimeout(r, 40));
+      ws.send(JSON.stringify({
+        id: Math.floor(Math.random() * 1000000),
+        method: 'Input.dispatchMouseEvent',
+        params: { type: 'mouseReleased', x: dialogAction.x, y: dialogAction.y, button: 'left', clickCount: 1 }
+      }));
+      await new Promise(r => setTimeout(r, 400));
+    } else {
+      break;
     }
-  })()`);
+  }
 }
 
 async function discardIncompleteModal(ws, cdpEval) {
-  return await cdpEval(ws, `(() => {
+  // First dismiss any post-submit prompt if present
+  await dismissPostSubmitDialogs(ws, cdpEval);
+
+  const dismissTarget = await cdpEval(ws, `(() => {
     const modal = document.querySelector('dialog, [role="dialog"], .artdeco-modal');
-    if (!modal) return false;
+    if (!modal) return { found: false };
 
-    // Check if it's the post-submit "turn resume into profile" modal
-    const notNowBtn = Array.from(document.querySelectorAll('button')).find(b => /not now/i.test(b.innerText.trim()) && b.offsetWidth > 0);
-    if (notNowBtn) {
-      notNowBtn.click();
-      return true;
-    }
-
-    // Dismiss the open modal
-    const dismissBtn = modal.querySelector('.artdeco-modal__dismiss, [data-test-modal-close-btn], button[aria-label="Dismiss"]')
+    const dismissBtn = modal.querySelector('.artdeco-modal__dismiss, [data-test-modal-close-btn], button[aria-label="Dismiss"], button[aria-label="Close"]')
       || document.querySelector('.artdeco-modal__dismiss, button[aria-label="Dismiss"]');
-    if (dismissBtn) {
+    if (dismissBtn && dismissBtn.offsetWidth > 0) {
+      const r = dismissBtn.getBoundingClientRect();
       dismissBtn.click();
-      setTimeout(() => {
-        const discardBtn = document.querySelector('[data-control-name="discard_application_confirm_btn"], button[data-test-dialog-primary-btn]')
-          || Array.from(document.querySelectorAll('button')).find(b => /discard/i.test(b.innerText.trim()) && b.offsetWidth > 0);
-        if (discardBtn) discardBtn.click();
-      }, 350);
-      return true;
+      return { found: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
     }
-    return false;
+    return { found: false };
   })()`);
+
+  if (dismissTarget && dismissTarget.found && dismissTarget.x && dismissTarget.y) {
+    ws.send(JSON.stringify({
+      id: Math.floor(Math.random() * 1000000),
+      method: 'Input.dispatchMouseEvent',
+      params: { type: 'mousePressed', x: dismissTarget.x, y: dismissTarget.y, button: 'left', clickCount: 1 }
+    }));
+    await new Promise(r => setTimeout(r, 40));
+    ws.send(JSON.stringify({
+      id: Math.floor(Math.random() * 1000000),
+      method: 'Input.dispatchMouseEvent',
+      params: { type: 'mouseReleased', x: dismissTarget.x, y: dismissTarget.y, button: 'left', clickCount: 1 }
+    }));
+    await new Promise(r => setTimeout(r, 400));
+
+    // Confirm Discard application
+    const discardTarget = await cdpEval(ws, `(() => {
+      const discardBtn = document.querySelector('[data-control-name="discard_application_confirm_btn"], button[data-test-dialog-primary-btn]')
+        || Array.from(document.querySelectorAll('button')).find(b => /discard/i.test(b.innerText.trim()) && b.offsetWidth > 0);
+      if (discardBtn) {
+        const r = discardBtn.getBoundingClientRect();
+        discardBtn.click();
+        return { found: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+      }
+      return { found: false };
+    })()`);
+
+    if (discardTarget && discardTarget.found && discardTarget.x && discardTarget.y) {
+      ws.send(JSON.stringify({
+        id: Math.floor(Math.random() * 1000000),
+        method: 'Input.dispatchMouseEvent',
+        params: { type: 'mousePressed', x: discardTarget.x, y: discardTarget.y, button: 'left', clickCount: 1 }
+      }));
+      await new Promise(r => setTimeout(r, 40));
+      ws.send(JSON.stringify({
+        id: Math.floor(Math.random() * 1000000),
+        method: 'Input.dispatchMouseEvent',
+        params: { type: 'mouseReleased', x: discardTarget.x, y: discardTarget.y, button: 'left', clickCount: 1 }
+      }));
+      await new Promise(r => setTimeout(r, 300));
+    }
+    return true;
+  }
+  return false;
 }
 
 module.exports = {
   getLinkedInModalStatus,
   handleProfilePrompt,
+  handleSafetyReminder,
   pruneEducation,
   solveFormFields,
   trySubmitLinkedInModal,

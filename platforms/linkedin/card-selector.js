@@ -1,13 +1,32 @@
 /**
  * BioTailr AI StandBy - LinkedIn Job Card Selector
  * Discovers and selects job cards across both Modern Atomic CSS layout and Legacy LinkedIn layout.
+ * Dispatches native CDP mouse events for 100% reliable React interaction.
  */
+
+async function dispatchCdpClick(ws, x, y) {
+  return new Promise(resolve => {
+    ws.send(JSON.stringify({
+      id: Math.floor(Math.random() * 1000000),
+      method: 'Input.dispatchMouseEvent',
+      params: { type: 'mousePressed', x, y, button: 'left', clickCount: 1 }
+    }));
+    setTimeout(() => {
+      ws.send(JSON.stringify({
+        id: Math.floor(Math.random() * 1000000),
+        method: 'Input.dispatchMouseEvent',
+        params: { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }
+      }));
+      setTimeout(resolve, 400);
+    }, 40);
+  });
+}
 
 async function selectNextLinkedInCard(ws, cdpEval, visitedSet) {
   const visitedArray = Array.from(visitedSet);
   const serialized = JSON.stringify(visitedArray);
 
-  return await cdpEval(ws, `(() => {
+  const cardData = await cdpEval(ws, `(() => {
     const visited = new Set(${serialized});
 
     // Helper to test if a listing is in the visited set
@@ -22,7 +41,41 @@ async function selectNextLinkedInCard(ws, cdpEval, visitedSet) {
       return false;
     };
 
-    // 1. Standard search results list items (Works across both new & legacy LinkedIn)
+    // 1. Modern Atomic CSS Layout (Cards with componentkey)
+    const atomicCards = Array.from(document.querySelectorAll('div[componentkey^="job-card-component-ref-"][role="button"], div[componentkey^="job-card-component-ref-"]'));
+    for (const card of atomicCards) {
+      const text = card.innerText || '';
+      const isApplied = text.includes('Applied') || text.includes('Application submitted');
+      if (isApplied) continue;
+
+      const lines = text.split('\\n').map(l => l.trim()).filter(Boolean);
+      let title = lines[0] || '';
+      let company = lines[1] || '';
+      if (/^selected/i.test(title)) {
+        title = lines[1] || title;
+        company = lines[2] || company;
+      }
+      title = (title || '').replace(/^Selected,?\\s*/i, '').replace(/\\s*\\(Verified job\\)/i, '').trim();
+      company = (company || '').replace(/^Selected,?\\s*/i, '').trim();
+
+      const jobId = card.getAttribute('componentkey')?.replace(/\\D/g, '') || '';
+
+      if (!isVisited(title, company, jobId)) {
+        card.scrollIntoView({ behavior: 'instant', block: 'center' });
+        const r = card.getBoundingClientRect();
+        return {
+          found: true,
+          title,
+          company,
+          jobId,
+          key: (title + '::' + company).toLowerCase(),
+          x: r.left + r.width / 2,
+          y: r.top + r.height / 2
+        };
+      }
+    }
+
+    // 2. Legacy / Classic LinkedIn Cards
     const listItems = Array.from(document.querySelectorAll('.jobs-search-results-list__list-item, [data-occludable-job-id], .job-card-container'));
     for (const card of listItems) {
       const text = (card.innerText || '').toLowerCase();
@@ -40,14 +93,20 @@ async function selectNextLinkedInCard(ws, cdpEval, visitedSet) {
       if (!isVisited(title, company, jobId)) {
         const clickTarget = card.querySelector('a.job-card-container__link, a[href*="/jobs/view/"], [role="button"][tabindex="0"], a') || card;
         clickTarget.scrollIntoView({ behavior: 'instant', block: 'center' });
-        clickTarget.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-        clickTarget.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-        clickTarget.click();
-        return { found: true, title, company, jobId, key: (title + '::' + company).toLowerCase() };
+        const r = clickTarget.getBoundingClientRect();
+        return {
+          found: true,
+          title,
+          company,
+          jobId,
+          key: (title + '::' + company).toLowerCase(),
+          x: r.left + r.width / 2,
+          y: r.top + r.height / 2
+        };
       }
     }
 
-    // 2. Modern Dismiss button discovered cards fallback
+    // 3. Modern Dismiss button fallback
     const dismissBtns = Array.from(document.querySelectorAll('button[aria-label*="Dismiss"], button[aria-label*="dismiss"]'));
     for (const btn of dismissBtns) {
       const label = btn.getAttribute('aria-label') || '';
@@ -57,7 +116,7 @@ async function selectNextLinkedInCard(ws, cdpEval, visitedSet) {
 
       let card = btn.parentElement;
       while (card && card.tagName !== 'BODY') {
-        if (card.nextElementSibling?.tagName === 'HR' || card.previousElementSibling?.tagName === 'HR') break;
+        if (card.getAttribute('role') === 'button' || card.getAttribute('componentkey')) break;
         card = card.parentElement;
       }
       if (!card) continue;
@@ -70,17 +129,28 @@ async function selectNextLinkedInCard(ws, cdpEval, visitedSet) {
       const company = compEl ? compEl.innerText.trim() : '';
 
       if (!isVisited(title, company, '')) {
-        const clickTarget = card.querySelector('[componentkey], div[role="button"][tabindex="0"], a') || card;
-        clickTarget.scrollIntoView({ behavior: 'instant', block: 'center' });
-        clickTarget.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-        clickTarget.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-        clickTarget.click();
-        return { found: true, title, company, key: (title + '::' + company).toLowerCase() };
+        card.scrollIntoView({ behavior: 'instant', block: 'center' });
+        const r = card.getBoundingClientRect();
+        return {
+          found: true,
+          title,
+          company,
+          key: (title + '::' + company).toLowerCase(),
+          x: r.left + r.width / 2,
+          y: r.top + r.height / 2
+        };
       }
     }
 
     return { found: false };
   })()`);
+
+  if (cardData && cardData.found && cardData.x && cardData.y) {
+    await dispatchCdpClick(ws, cardData.x, cardData.y);
+    await new Promise(r => setTimeout(r, 1200));
+  }
+
+  return cardData || { found: false };
 }
 
 module.exports = {
