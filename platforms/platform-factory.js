@@ -5,10 +5,15 @@
 
 const LinkedInPlatform = require('./linkedin');
 const IndeedPlatform = require('./indeed');
+const YCPlatform = require('./yc');
 
 class PlatformFactory {
   static createPlatform(tabUrl, ws, cdpEval, profile, helpers = {}) {
     const url = (tabUrl || '').toLowerCase();
+
+    if (url.includes('workatastartup.com') || url.includes('ycombinator.com/jobs')) {
+      return new YCPlatform(ws, cdpEval, profile, helpers);
+    }
 
     if (url.includes('linkedin.com')) {
       return new LinkedInPlatform(ws, cdpEval, profile, helpers);
