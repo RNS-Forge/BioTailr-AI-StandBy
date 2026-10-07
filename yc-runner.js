@@ -93,7 +93,7 @@ async function main() {
 
   const ws = await connectWebSocket(activeTab.webSocketDebuggerUrl);
 
-  const orchestrator = new YCOrchestrator(ws, profile);
+  const orchestrator = new YCOrchestrator(ws, profile, cdpPort);
   await orchestrator.run();
 }
 

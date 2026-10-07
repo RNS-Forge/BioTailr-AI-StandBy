@@ -1,27 +1,42 @@
 /**
- * BioTailr AI StandBy - YC (Work at a Startup) Dedicated Orchestrator
- * Coordinates job discovery, navigation, personalized message generation, and application submission
- * on workatastartup.com.
+ * BioTailr AI StandBy - YC (Work at a Startup) Orchestrator
+ * Handles the real YC apply flow:
  *
- * Flow per job:
- *  1. On list page → find unvisited "View job" link → click it
- *  2. Wait for job detail page to load
- *  3. Read: title, company, description, tech stack
- *  4. Click "Apply" button → modal opens
- *  5. Generate personalized message → fill textarea → tick location checkbox → click Send
- *  6. Verify sent → close modal → go back to list → repeat
+ *  1. On listing page → find next unvisited "Apply" button on a card
+ *  2. Click it → a NEW TAB opens with the job detail page
+ *  3. Connect CDP to the new tab
+ *  4. On new tab → read title/company/description → click Apply again
+ *  5. "Reach out to X at Y" modal opens → fill personalized message → Send
+ *  6. Verify sent → close the new tab via CDP
+ *  7. Back on listing tab → continue to next card
  */
 
-const { log, sleep } = require('./cdp-client');
+const { log, sleep, connectWebSocket, cdpEval } = require('./cdp-client');
 const { ensureHudInjected, resetHudToStandby, updateHud } = require('./hud-manager');
 const { generateYCMessage } = require('../platforms/yc/message-generator');
-const { getYCModalStatus, fillYCMessageTextarea, handleLocationCheckbox, clickYCSendButton, dismissYCModal } = require('../platforms/yc/apply-modal');
-const { inspectYCJob, clickYCApplyButton, selectNextYCJob, scrollYCFeed, goToNextYCPage, goBackToListings } = require('../platforms/yc/card-selector');
+const {
+  getYCModalStatus,
+  fillYCMessageTextarea,
+  handleLocationCheckbox,
+  clickYCSendButton,
+  dismissYCModal
+} = require('../platforms/yc/apply-modal');
+const {
+  findNextYCCard,
+  clickApplyOnCard,
+  waitForNewTab,
+  getAllTabs,
+  closeTab,
+  inspectJobDetailPage,
+  clickApplyOnDetailPage,
+  scrollYCFeed
+} = require('../platforms/yc/card-selector');
 
 class YCOrchestrator {
-  constructor(ws, profile) {
-    this.ws = ws;
+  constructor(ws, profile, cdpPort = 9222) {
+    this.ws = ws;             // WebSocket to the LISTING TAB
     this.profile = profile;
+    this.cdpPort = cdpPort;
     this.batchTarget = (profile.settings?.batchTarget === 0 || profile.settings?.batchTarget === 'unlimited')
       ? Infinity
       : (profile.settings?.batchTarget || Infinity);
@@ -38,7 +53,7 @@ class YCOrchestrator {
 
     const appliedJobs = [];
     const failedJobs = [];
-    const visitedJobKeys = new Set();
+    const visitedKeys = new Set();
 
     await updateHud(this.ws, {
       page: 1,
@@ -46,137 +61,257 @@ class YCOrchestrator {
       failedCount: 0,
       appliedJobs: [],
       failedJobs: [],
-      jobTitle: 'Initializing YC Engine...',
+      jobTitle: 'Scanning YC listings...',
       company: 'Work at a Startup',
       status: 'ACTIVE'
     });
 
-    log('START', 'YC continuous apply active. Scanning listings...');
+    log('START', 'YC continuous apply active. Scanning job cards...');
 
     let jobIndex = 0;
-    let currentPage = 1;
-    let hasMoreJobs = true;
-    let consecutiveNoJobCount = 0;
+    let scrollCount = 0;
+    const MAX_SCROLLS = 20;
 
-    // cdpEval wrapper bound to this.ws
-    const cdpEval = require('./cdp-client').cdpEval;
-
-    while (appliedJobs.length < this.batchTarget && hasMoreJobs) {
+    while (appliedJobs.length < this.batchTarget) {
       jobIndex++;
       console.log('\n----------------------------------------------------');
       const targetLabel = this.batchTarget === Infinity ? 'Unlimited' : String(this.batchTarget);
-      log('BATCH', `[Applied: ${appliedJobs.length}/${targetLabel} | Job #${jobIndex} | Page ${currentPage}] Scanning YC listings...`);
-      console.log('----------------------------------------------------');
+      log('BATCH', `[Applied: ${appliedJobs.length}/${targetLabel} | Card #${jobIndex}] Scanning listing cards...`);
 
       await ensureHudInjected(this.ws);
 
-      // Step 1: Check current page state
-      const pageInfo = await inspectYCJob(this.ws, cdpEval);
+      // Step 1: Find next unvisited Apply button on listing page
+      const card = await findNextYCCard(this.ws, cdpEval, visitedKeys);
 
-      if (pageInfo && pageInfo.isJobDetailPage && pageInfo.hasApplyButton) {
-        // We're already on a detail page - apply to this job
-        log('INFO', `On job detail page: "${pageInfo.title}" at "${pageInfo.company}"`);
-
-        const jobKey = (pageInfo.title + '::' + pageInfo.company).toLowerCase();
-        if (visitedJobKeys.has(jobKey)) {
-          log('SKIP', 'Already applied to this job. Navigating back...');
-          await goBackToListings(this.ws, cdpEval);
-          await sleep(2000);
-          continue;
+      if (!card || !card.found) {
+        if (scrollCount >= MAX_SCROLLS) {
+          log('COMPLETE', 'Scrolled to bottom of all listings. Session complete.');
+          break;
         }
-
-        visitedJobKeys.add(jobKey);
-        visitedJobKeys.add(pageInfo.title.toLowerCase());
-
-        await this._applyToJob(cdpEval, pageInfo, appliedJobs, failedJobs, currentPage, jobIndex, targetLabel);
-
-        // Go back to listings for next job
-        await goBackToListings(this.ws, cdpEval);
-        await sleep(2500);
-        consecutiveNoJobCount = 0;
+        scrollCount++;
+        log('FEED', `No more unvisited cards visible. Scrolling (${scrollCount}/${MAX_SCROLLS})...`);
+        await scrollYCFeed(this.ws, cdpEval);
+        await sleep(2000);
         continue;
       }
 
-      // Step 2: On list page — select next unvisited job
+      scrollCount = 0; // Reset scroll counter when we find jobs
+
+      // Mark as visited immediately
+      const cardKey = (card.title + '::' + card.company).toLowerCase();
+      visitedKeys.add(cardKey);
+      visitedKeys.add(card.title.toLowerCase());
+
+      log('INFO', `Found job: "${card.title}" at "${card.company}" (card #${card.cardIndex})`);
+
       await updateHud(this.ws, {
-        page: currentPage,
+        page: 1,
         appliedCount: appliedJobs.length,
         failedCount: failedJobs.length,
         appliedJobs,
         failedJobs,
-        jobTitle: 'Scanning listings...',
-        company: 'Work at a Startup',
-        status: 'Scanning Cards'
+        jobTitle: card.title,
+        company: card.company,
+        status: 'Opening Job Tab'
       });
 
-      const nextJob = await selectNextYCJob(this.ws, cdpEval, visitedJobKeys);
+      // Step 2: Snapshot current tabs, then click Apply
+      let tabsBefore;
+      try {
+        tabsBefore = await getAllTabs(this.cdpPort);
+      } catch (e) {
+        log('WARN', `Could not get tab list: ${e.message}. Skipping...`);
+        failedJobs.push({ title: card.title, company: card.company, reason: 'Could not enumerate tabs' });
+        continue;
+      }
+      const knownTabIds = new Set(tabsBefore.map(t => t.id));
 
-      if (!nextJob || !nextJob.found) {
-        consecutiveNoJobCount++;
-        log('FEED', `No unvisited jobs found (attempt ${consecutiveNoJobCount}). Scrolling for more...`);
+      log('ACTION', `Clicking Apply on "${card.title}"...`);
+      await clickApplyOnCard(this.ws, card.x, card.y);
 
-        if (consecutiveNoJobCount <= 3) {
-          await scrollYCFeed(this.ws, cdpEval);
-          await sleep(1800);
-          continue;
-        }
+      // Step 3: Wait for the new tab to open
+      log('WAIT', 'Waiting for new tab to open...');
+      const newTab = await waitForNewTab(this.cdpPort, knownTabIds, 6000);
 
-        // Try next page
-        log('PAGINATION', `Page ${currentPage} exhausted. Advancing to next page...`);
-        const paged = await goToNextYCPage(this.ws, cdpEval, currentPage + 1);
-        if (paged && paged.success) {
-          currentPage++;
-          consecutiveNoJobCount = 0;
-          log('PAGINATION', `Advanced to page ${currentPage}. Loading fresh listings...`);
-          await sleep(3500);
-          await ensureHudInjected(this.ws);
-          continue;
-        }
-
-        log('COMPLETE', 'No more jobs found on any page. Session complete.');
-        hasMoreJobs = false;
+      if (!newTab) {
+        log('WARN', `New tab did not open for "${card.title}". Skipping...`);
+        failedJobs.push({ title: card.title, company: card.company, reason: 'New tab did not open after Apply click' });
         continue;
       }
 
-      consecutiveNoJobCount = 0;
-      log('NAVIGATE', `Opening job detail: "${nextJob.title}" at "${nextJob.company}"...`);
+      log('TAB', `New tab opened: "${newTab.title}" (${newTab.url})`);
 
-      // Add to visited immediately to avoid re-selecting
-      visitedJobKeys.add((nextJob.title + '::' + nextJob.company).toLowerCase());
-      if (nextJob.title) visitedJobKeys.add(nextJob.title.toLowerCase());
-      if (nextJob.href) visitedJobKeys.add(nextJob.href);
-      if (nextJob.urlKey) visitedJobKeys.add(nextJob.urlKey);
-
-      await updateHud(this.ws, {
-        page: currentPage,
-        appliedCount: appliedJobs.length,
-        failedCount: failedJobs.length,
-        appliedJobs,
-        failedJobs,
-        jobTitle: nextJob.title,
-        company: nextJob.company,
-        status: 'Navigating to Job'
-      });
-
-      // Wait for job detail page to load
-      await sleep(2500);
-
-      // Step 3: Now on job detail page — inspect and apply
-      const jobDetail = await inspectYCJob(this.ws, cdpEval);
-
-      if (!jobDetail || jobDetail.isListPage || !jobDetail.hasApplyButton) {
-        log('WARN', `Could not load job detail page for "${nextJob.title}". Skipping...`);
-        failedJobs.push({ title: nextJob.title, company: nextJob.company, reason: 'Job detail page did not load or no Apply button' });
-        await goBackToListings(this.ws, cdpEval);
-        await sleep(1500);
+      // Step 4: Connect to the new tab
+      let newTabWs;
+      try {
+        newTabWs = await connectWebSocket(newTab.webSocketDebuggerUrl);
+        log('CONNECTED', `Connected to new tab CDP`);
+      } catch (e) {
+        log('WARN', `Could not connect to new tab: ${e.message}`);
+        failedJobs.push({ title: card.title, company: card.company, reason: `New tab WebSocket connect failed: ${e.message}` });
+        try { await closeTab(this.cdpPort, newTab.id); } catch (_) {}
         continue;
       }
 
-      await this._applyToJob(cdpEval, { ...nextJob, ...jobDetail }, appliedJobs, failedJobs, currentPage, jobIndex, targetLabel);
+      // Step 5: Wait for the job detail page to fully load
+      await sleep(2000);
 
-      // Go back to listings for next job
-      await goBackToListings(this.ws, cdpEval);
-      await sleep(2500);
+      try {
+        // Read job details from the new tab
+        const jobDetail = await inspectJobDetailPage(newTabWs, cdpEval);
+        const title = jobDetail?.title || card.title;
+        const company = jobDetail?.company || card.company;
+        const description = jobDetail?.description || card.cardText || '';
+        const techStack = jobDetail?.techStack || '';
+
+        log('INFO', `Job detail: "${title}" at "${company}" | Has Apply: ${jobDetail?.hasApplyButton}`);
+
+        await updateHud(this.ws, {
+          page: 1,
+          appliedCount: appliedJobs.length,
+          failedCount: failedJobs.length,
+          appliedJobs,
+          failedJobs,
+          jobTitle: title,
+          company,
+          status: 'Solving Application'
+        });
+
+        // Step 6: Click Apply on the detail page (opens the modal)
+        if (jobDetail && jobDetail.hasApplyButton) {
+          await clickApplyOnDetailPage(newTabWs, cdpEval);
+          log('INFO', 'Clicked Apply on detail page. Waiting for modal...');
+          await sleep(1200);
+        } else {
+          // Modal might already be visible if Apply was enough on listing
+          log('INFO', 'No second Apply button found — checking if modal is already open...');
+          await sleep(800);
+        }
+
+        // Step 7: Check modal is open
+        let modalStatus = await getYCModalStatus(newTabWs, cdpEval);
+
+        if (!modalStatus || !modalStatus.open) {
+          // Try clicking Apply one more time
+          await clickApplyOnDetailPage(newTabWs, cdpEval);
+          await sleep(1200);
+          modalStatus = await getYCModalStatus(newTabWs, cdpEval);
+        }
+
+        if (!modalStatus || !modalStatus.open) {
+          log('WARN', `Apply modal did not open for "${title}". Closing tab and skipping...`);
+          failedJobs.push({ title, company, reason: 'Apply modal did not open on detail page' });
+          newTabWs.close();
+          await closeTab(this.cdpPort, newTab.id);
+          await sleep(500);
+          continue;
+        }
+
+        log('MODAL', `Modal open: "${modalStatus.headingText}" | Recruiter: ${modalStatus.recruiterName}`);
+
+        // Step 8: Generate personalized message
+        const message = generateYCMessage({ title, company, description, techStack }, this.profile);
+        log('MESSAGE', `Generated ${message.length}-char message: "${message.substring(0, 70)}..."`);
+
+        // Step 9: Fill the message textarea
+        const filled = await fillYCMessageTextarea(newTabWs, cdpEval, message);
+        if (!filled || !filled.filled) {
+          log('WARN', `Could not fill textarea for "${title}". Closing tab...`);
+          failedJobs.push({ title, company, reason: 'Could not fill message textarea' });
+          newTabWs.close();
+          await closeTab(this.cdpPort, newTab.id);
+          await sleep(500);
+          continue;
+        }
+        log('FILL', `Textarea filled: ${filled.length} characters`);
+        await sleep(300);
+
+        // Step 10: Tick location/relocation checkbox
+        await handleLocationCheckbox(newTabWs, cdpEval);
+        await sleep(200);
+
+        // Step 11: Click Send — with retry logic
+        let submitted = false;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          const sendResult = await clickYCSendButton(newTabWs, cdpEval);
+          if (!sendResult || !sendResult.clicked) {
+            log('WARN', `Send button not found (attempt ${attempt}/3)...`);
+            await sleep(600);
+            continue;
+          }
+
+          log('SEND', `Clicked Send (attempt ${attempt}/3)...`);
+          await sleep(1500);
+
+          const postStatus = await getYCModalStatus(newTabWs, cdpEval);
+
+          // Success: modal closed or shows confirmation
+          if (!postStatus || !postStatus.open || postStatus.isSent) {
+            submitted = true;
+            break;
+          }
+
+          // Error: message too short — extend and retry
+          if (postStatus.errorText) {
+            log('RETRY', `Error "${postStatus.errorText.substring(0, 60)}". Extending message...`);
+            const extMsg = message + ' I am highly motivated to contribute to ' + company + ' and would love the opportunity to connect. Thank you for your consideration!';
+            await fillYCMessageTextarea(newTabWs, cdpEval, extMsg);
+            await sleep(300);
+          }
+        }
+
+        if (submitted) {
+          log('SUCCESS', `Application sent to "${company}" for "${title}"!`);
+          appliedJobs.push({
+            index: jobIndex,
+            title,
+            company,
+            status: 'SENT',
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+          });
+          await updateHud(this.ws, {
+            page: 1,
+            appliedCount: appliedJobs.length,
+            failedCount: failedJobs.length,
+            appliedJobs,
+            failedJobs,
+            jobTitle: title,
+            company,
+            status: 'Applied'
+          });
+        } else {
+          log('WARN', `Could not confirm submission for "${title}".`);
+          failedJobs.push({ title, company, reason: 'Message could not be sent (modal stayed open)' });
+          await updateHud(this.ws, {
+            page: 1,
+            appliedCount: appliedJobs.length,
+            failedCount: failedJobs.length,
+            appliedJobs,
+            failedJobs,
+            jobTitle: title,
+            company,
+            status: 'Failed'
+          });
+        }
+
+      } catch (err) {
+        log('ERROR', `Error processing "${card.title}": ${err.message}`);
+        failedJobs.push({ title: card.title, company: card.company, reason: err.message });
+      }
+
+      // Step 12: Close the new tab and return to listing tab
+      try {
+        newTabWs.close();
+      } catch (_) {}
+
+      log('CLOSE', `Closing new tab: ${newTab.id}`);
+      await closeTab(this.cdpPort, newTab.id);
+      await sleep(800);
+
+      // Bring listing tab back into focus by refreshing HUD
+      await ensureHudInjected(this.ws);
+      log('LISTING', 'Returned to listing page. Continuing...');
+      await sleep(400);
     }
 
     // Final summary
@@ -189,170 +324,23 @@ class YCOrchestrator {
       console.table(appliedJobs);
     }
     if (failedJobs.length > 0) {
-      console.log('\nFailed / Skipped Listings:');
+      console.log('\nFailed / Skipped:');
       console.table(failedJobs);
     }
 
     await updateHud(this.ws, {
-      page: currentPage,
+      page: 1,
       appliedCount: appliedJobs.length,
       failedCount: failedJobs.length,
       appliedJobs,
       failedJobs,
-      jobTitle: 'All YC Pages Completed',
+      jobTitle: 'All YC Listings Processed',
       company: 'Session Finished',
       status: 'COMPLETE'
     });
 
     this.ws.close();
     process.exit(0);
-  }
-
-  /**
-   * Internal: click Apply, fill modal, send, verify.
-   */
-  async _applyToJob(cdpEval, jobInfo, appliedJobs, failedJobs, currentPage, jobIndex, targetLabel) {
-    const { title, company, description, techStack } = jobInfo;
-    log('ACTION', `Applying to "${title}" at "${company}"...`);
-
-    await updateHud(this.ws, {
-      page: currentPage,
-      appliedCount: appliedJobs.length,
-      failedCount: failedJobs.length,
-      appliedJobs,
-      failedJobs,
-      jobTitle: title,
-      company,
-      status: 'Solving Application'
-    });
-
-    try {
-      // Click Apply button
-      const clickResult = await clickYCApplyButton(this.ws, cdpEval);
-      if (!clickResult || !clickResult.clicked) {
-        log('WARN', `Could not click Apply button for "${title}". Skipping...`);
-        failedJobs.push({ title, company, reason: 'Apply button not found or not clickable' });
-        return;
-      }
-
-      log('INFO', 'Apply button clicked. Waiting for modal...');
-      await sleep(1000);
-
-      // Verify modal opened
-      let modalStatus = await getYCModalStatus(this.ws, cdpEval);
-      if (!modalStatus || !modalStatus.open) {
-        // Retry once
-        await clickYCApplyButton(this.ws, cdpEval);
-        await sleep(1200);
-        modalStatus = await getYCModalStatus(this.ws, cdpEval);
-      }
-
-      if (!modalStatus || !modalStatus.open) {
-        log('WARN', `Apply modal did not open for "${title}". Skipping...`);
-        failedJobs.push({ title, company, reason: 'Apply modal did not open' });
-        return;
-      }
-
-      log('MODAL', `Modal open: "${modalStatus.headingText}"`);
-
-      // Generate personalized message
-      const message = generateYCMessage({ title, company, description, techStack }, this.profile);
-      log('MESSAGE', `Generated message (${message.length} chars): ${message.substring(0, 80)}...`);
-
-      // Fill message textarea
-      const filled = await fillYCMessageTextarea(this.ws, cdpEval, message);
-      if (!filled || !filled.filled) {
-        log('WARN', `Could not fill textarea for "${title}". Skipping...`);
-        failedJobs.push({ title, company, reason: 'Could not fill message textarea' });
-        await dismissYCModal(this.ws, cdpEval);
-        return;
-      }
-      log('FILL', `Filled textarea: ${filled.length} chars`);
-      await sleep(300);
-
-      // Handle location checkbox (tick it - open to relocation)
-      await handleLocationCheckbox(this.ws, cdpEval);
-      await sleep(200);
-
-      // Click Send
-      let submitted = false;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const sendResult = await clickYCSendButton(this.ws, cdpEval);
-        if (!sendResult || !sendResult.clicked) {
-          log('WARN', `Send button not clicked (attempt ${attempt + 1})...`);
-          await sleep(500);
-          continue;
-        }
-
-        log('SEND', `Clicked Send button (attempt ${attempt + 1})...`);
-        await sleep(1500);
-
-        // Check result
-        const postStatus = await getYCModalStatus(this.ws, cdpEval);
-
-        // If modal closed → sent
-        if (!postStatus || !postStatus.open || postStatus.isSent) {
-          submitted = true;
-          break;
-        }
-
-        // If char count error → extend message and retry
-        if (postStatus.errorText && (postStatus.errorText.includes('50') || postStatus.errorText.toLowerCase().includes('character'))) {
-          log('RETRY', 'Message too short error. Extending message and retrying...');
-          const extendedMsg = message + ' I am confident I can add real value to your team and would love to discuss further. Thank you for your time!';
-          await fillYCMessageTextarea(this.ws, cdpEval, extendedMsg);
-          await sleep(300);
-          continue;
-        }
-
-        // If some other error, log and break
-        if (postStatus.errorText) {
-          log('WARN', `Send error: "${postStatus.errorText}"`);
-          break;
-        }
-      }
-
-      if (submitted) {
-        log('SUCCESS', `Application sent to "${company}" for "${title}"!`);
-        appliedJobs.push({
-          index: jobIndex,
-          title,
-          company,
-          status: 'SENT',
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-        });
-        await updateHud(this.ws, {
-          page: currentPage,
-          appliedCount: appliedJobs.length,
-          failedCount: failedJobs.length,
-          appliedJobs,
-          failedJobs,
-          jobTitle: title,
-          company,
-          status: 'Applied ✓'
-        });
-        await sleep(500);
-        await dismissYCModal(this.ws, cdpEval);
-      } else {
-        log('WARN', `Could not confirm submission for "${title}". Marking as failed.`);
-        failedJobs.push({ title, company, reason: 'Could not confirm message was sent' });
-        await updateHud(this.ws, {
-          page: currentPage,
-          appliedCount: appliedJobs.length,
-          failedCount: failedJobs.length,
-          appliedJobs,
-          failedJobs,
-          jobTitle: title,
-          company,
-          status: 'Failed'
-        });
-        await dismissYCModal(this.ws, cdpEval);
-      }
-    } catch (err) {
-      log('ERROR', `Error applying to "${title}": ${err.message}`);
-      failedJobs.push({ title, company, reason: err.message });
-      try { await dismissYCModal(this.ws, cdpEval); } catch (e) {}
-    }
   }
 }
 

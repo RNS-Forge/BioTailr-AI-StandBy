@@ -1,122 +1,213 @@
 /**
- * BioTailr AI StandBy - YC Card Selector & Feed Scroller
- * Handles selecting unvisited job cards on workatastartup.com listings.
- * Each "card" is a job listing row in the compact list layout.
+ * BioTailr AI StandBy - YC Card Selector & Tab Manager
+ * Handles the YC listing page where each job card has a direct "Apply" button.
+ * Clicking Apply opens a NEW TAB with the job detail page.
+ *
+ * Flow:
+ *  1. On listing page: find unvisited "Apply" button on a job card
+ *  2. Click it → new tab opens with job detail
+ *  3. Caller switches CDP to the new tab
+ *  4. On new tab: read job details → click Apply → fill modal → Send
+ *  5. Close the new tab → back to listing tab
  */
 
+const http = require('http');
+
 /**
- * Select the next unvisited job card from the YC listings feed.
- * On the list page: clicks "View job" to navigate to job detail page.
- * On the job detail page: reads current job details.
+ * Find all job cards on the listing page and return the next unvisited one.
+ * Returns { found, title, company, cardIndex, applyBtn coords }
+ * Does NOT click — caller will click so we can intercept the new tab.
  */
-async function selectNextYCJob(ws, cdpEval, visitedKeys) {
+async function findNextYCCard(ws, cdpEval, visitedKeys) {
   const serializedKeys = JSON.stringify(Array.from(visitedKeys));
 
   return await cdpEval(ws, `(() => {
     const visited = new Set(${serializedKeys});
 
-    // On list page (compact layout): find "View job" buttons
-    // Each job card has: company name, job title, "View job" button
-    const jobCards = Array.from(document.querySelectorAll([
-      'a[href*="/jobs/"]',
-      '.job-listing',
-      '[class*="job-card"]',
-      '[class*="listing"]',
-      'div[class*="company"]'
-    ].join(', '))).filter(el => el.offsetWidth > 0);
-
-    // Try to find job rows in list-compact layout
-    const allViewJobLinks = Array.from(document.querySelectorAll('a[href*="/jobs/"]')).filter(a => {
-      const txt = (a.innerText || '').trim().toLowerCase();
-      return txt === 'view job' && a.offsetWidth > 0;
+    // Each job card is a container with: company name, job title, "Apply" button
+    // Try multiple selector strategies based on YC's grid layout
+    const applyButtons = Array.from(document.querySelectorAll('button, a[href*="/jobs/"]')).filter(btn => {
+      const txt = (btn.innerText || btn.textContent || '').trim().toLowerCase();
+      return txt === 'apply' && btn.offsetWidth > 0 && btn.offsetHeight > 0;
     });
 
-    for (const link of allViewJobLinks) {
-      // Get the parent card to extract job/company info
-      let card = link.closest('[class*="job"], [class*="listing"], [class*="company"], li, article');
-      if (!card) card = link.parentElement?.parentElement?.parentElement;
+    for (let i = 0; i < applyButtons.length; i++) {
+      const btn = applyButtons[i];
 
-      const cardText = (card ? card.innerText : '').toLowerCase();
-      const titleEl = card ? card.querySelector('h2, h3, [class*="title"], [class*="role"], [class*="position"]') : null;
-      const companyEl = card ? card.querySelector('h1, [class*="company-name"], [class*="company"]') : null;
-
-      const jobTitle = titleEl ? titleEl.innerText.trim() : '';
-      const company = companyEl ? companyEl.innerText.split('\\n')[0].trim() : '';
-      const href = link.href || '';
-
-      const key = (jobTitle + '::' + company).toLowerCase();
-      const urlKey = href.split('/jobs/')[1] || '';
-
-      if (visited.has(key) || visited.has(urlKey) || visited.has(jobTitle.toLowerCase()) || visited.has(href)) {
-        continue;
+      // Get parent card to extract title and company
+      let card = btn.closest('[class*="company"], [class*="job"], [class*="listing"], [class*="card"], article, li');
+      if (!card) {
+        // Walk up max 6 levels
+        let p = btn.parentElement;
+        for (let d = 0; d < 6; d++) {
+          if (!p) break;
+          if (p.querySelectorAll('a[href]').length > 0 && p.innerText.length > 50) {
+            card = p;
+            break;
+          }
+          p = p.parentElement;
+        }
       }
 
-      // Found an unvisited job - click the View job link
-      link.scrollIntoView({ behavior: 'instant', block: 'center' });
-      const r = link.getBoundingClientRect();
-      link.click();
+      const cardText = card ? card.innerText : '';
+
+      // Extract job title: usually a link with blue text
+      const titleLink = card ? card.querySelector('a[href*="/jobs/"], a[href*="/companies/"], [class*="title"], h2, h3') : null;
+      const title = titleLink ? titleLink.innerText.trim().split('\\n')[0] : '';
+
+      // Extract company: first heading or bold text
+      const companyEl = card ? card.querySelector('[class*="company"], b, strong, h1, h2') : null;
+      let company = companyEl ? companyEl.innerText.trim().split('\\n')[0] : '';
+      // Remove batch tag like "(W16)" from company name
+      company = company.replace(/\\s*\\([A-Z]\\d+\\).*$/, '').trim();
+
+      const key = (title + '::' + company).toLowerCase();
+      const titleKey = title.toLowerCase();
+
+      if (visited.has(key) || visited.has(titleKey)) continue;
+
+      // Return button coordinates without clicking (caller will use CDP mouse events)
+      btn.scrollIntoView({ behavior: 'instant', block: 'center' });
+      const r = btn.getBoundingClientRect();
 
       return {
         found: true,
-        title: jobTitle || 'Startup Engineering Role',
-        company: company || 'YC Company',
-        href,
-        urlKey,
+        title: title || 'Engineering Role',
+        company: company || 'YC Startup',
+        cardText: cardText.substring(0, 300),
         x: Math.round(r.left + r.width / 2),
-        y: Math.round(r.top + r.height / 2)
+        y: Math.round(r.top + r.height / 2),
+        cardIndex: i
       };
     }
 
-    return { found: false };
+    return { found: false, totalButtons: applyButtons.length };
   })()`);
 }
 
 /**
- * Inspect the currently open job detail page on workatastartup.com.
- * Returns job info + whether Apply button is present.
+ * Click the Apply button using CDP mouse events (so the new tab can be detected).
  */
-async function inspectYCJob(ws, cdpEval) {
+async function clickApplyOnCard(ws, x, y) {
+  ws.send(JSON.stringify({
+    id: Math.floor(Math.random() * 1000000),
+    method: 'Input.dispatchMouseEvent',
+    params: { type: 'mousePressed', x, y, button: 'left', clickCount: 1 }
+  }));
+  await new Promise(r => setTimeout(r, 60));
+  ws.send(JSON.stringify({
+    id: Math.floor(Math.random() * 1000000),
+    method: 'Input.dispatchMouseEvent',
+    params: { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }
+  }));
+}
+
+/**
+ * Poll for a new tab that appeared after clicking Apply.
+ * Returns the new tab info or null if not found within timeout.
+ */
+async function waitForNewTab(port, knownTabIds, timeoutMs = 5000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    await new Promise(r => setTimeout(r, 300));
+    try {
+      const tabs = await getAllTabs(port);
+      const newTab = tabs.find(t =>
+        t.type === 'page' &&
+        t.url &&
+        !knownTabIds.has(t.id) &&
+        !t.url.includes('chrome://') &&
+        !t.url.includes('about:')
+      );
+      if (newTab) return newTab;
+    } catch (e) {
+      // ignore
+    }
+  }
+  return null;
+}
+
+/**
+ * Fetch all open Chrome tabs.
+ */
+function getAllTabs(port = 9222) {
+  return new Promise((resolve, reject) => {
+    const req = http.get(`http://127.0.0.1:9222/json`, res => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); }
+        catch (e) { reject(e); }
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(3000, () => { req.destroy(); reject(new Error('Timeout')); });
+  });
+}
+
+/**
+ * Close a tab by its target ID via CDP HTTP endpoint.
+ */
+function closeTab(port, targetId) {
+  return new Promise((resolve) => {
+    const req = http.get(`http://127.0.0.1:9222/json/close/${targetId}`, res => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => resolve(data));
+    });
+    req.on('error', () => resolve('error'));
+    req.setTimeout(3000, () => { req.destroy(); resolve('timeout'); });
+  });
+}
+
+/**
+ * Inspect the job detail page on a newly opened tab.
+ * Returns { title, company, description, techStack, hasApplyButton }
+ */
+async function inspectJobDetailPage(ws, cdpEval) {
   return await cdpEval(ws, `(() => {
     const url = window.location.href;
 
-    // Job detail page: workatastartup.com/companies/xxx/jobs/yyy
-    const isJobDetailPage = url.includes('/jobs/') && !url.includes('/companies?');
-    const isListPage = url.includes('workatastartup.com/companies') || url.includes('/jobs?');
+    // Extract job title from page heading
+    const titleEl = document.querySelector('h1, [class*="job-title"], [class*="role-title"]');
+    const title = titleEl ? titleEl.innerText.trim().replace(/\\s+/g, ' ') : '';
 
-    if (isListPage) {
-      return {
-        isListPage: true,
-        isJobDetailPage: false,
-        hasApplyButton: false,
-        title: '',
-        company: '',
-        description: ''
-      };
-    }
+    // Extract company from breadcrumb or subheading
+    const companyEl = document.querySelector([
+      '[class*="company-name"]',
+      'h2',
+      '.company-header h1',
+      'nav a',
+      '[class*="company"] h1',
+      '[class*="company"] h2'
+    ].join(', '));
+    let company = companyEl ? companyEl.innerText.trim().split('\\n')[0] : '';
+    company = company.replace(/\\s*\\([A-Z]\\d+\\).*$/, '').trim();
 
-    // Extract job detail info
-    const titleEl = document.querySelector('h1, [class*="job-title"], [class*="title"]');
-    const companyEl = document.querySelector('[class*="company-name"], h2, [class*="company"]');
-    const applyBtn = Array.from(document.querySelectorAll('button, a[href*="apply"]')).find(b => {
+    // Get job description
+    const descEl = document.querySelector([
+      '[class*="description"]',
+      '[class*="job-content"]',
+      '[class*="role-description"]',
+      'main article',
+      '.prose',
+      'main'
+    ].join(', '));
+    const description = descEl ? descEl.innerText.trim().substring(0, 1000) : document.body.innerText.substring(0, 600);
+
+    // Tech stack tags
+    const techTags = Array.from(document.querySelectorAll('[class*="tag"], [class*="badge"], [class*="tech"], [class*="skill"]'))
+      .map(t => t.innerText.trim()).filter(t => t.length > 0 && t.length < 30).join(', ');
+
+    // Find Apply button on detail page
+    const applyBtn = Array.from(document.querySelectorAll('button, a')).find(b => {
       const txt = (b.innerText || '').trim().toLowerCase();
       return txt === 'apply' && b.offsetWidth > 0;
     });
 
-    // Get description text for message personalization
-    const descContainer = document.querySelector('[class*="description"], [class*="about"], main, article, .prose');
-    const description = descContainer ? descContainer.innerText.trim().substring(0, 800) : '';
-
-    // Extract tech stack from description / tags
-    const techTags = Array.from(document.querySelectorAll('[class*="tag"], [class*="badge"], [class*="stack"], [class*="tech"]'))
-      .map(t => t.innerText.trim()).filter(Boolean).join(', ');
-
-    const title = titleEl ? titleEl.innerText.trim().replace(/\\s+/g, ' ') : '';
-    const company = companyEl ? companyEl.innerText.trim().split('\\n')[0] : '';
-
     return {
-      isListPage,
-      isJobDetailPage,
-      title,
+      url,
+      title: title || document.title.split(' - ')[0].trim(),
       company,
       description,
       techStack: techTags,
@@ -128,16 +219,13 @@ async function inspectYCJob(ws, cdpEval) {
 
 /**
  * Click the Apply button on the job detail page.
- * Returns { clicked, x, y }
  */
-async function clickYCApplyButton(ws, cdpEval) {
+async function clickApplyOnDetailPage(ws, cdpEval) {
   const result = await cdpEval(ws, `(() => {
-    // Primary apply button at top of job detail page
-    const applyBtn = Array.from(document.querySelectorAll('button, a[href*="apply"]')).find(b => {
+    const applyBtn = Array.from(document.querySelectorAll('button, a')).find(b => {
       const txt = (b.innerText || '').trim().toLowerCase();
       return txt === 'apply' && b.offsetWidth > 0;
     });
-
     if (!applyBtn) return { clicked: false, reason: 'no_apply_btn' };
 
     applyBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
@@ -151,7 +239,6 @@ async function clickYCApplyButton(ws, cdpEval) {
 
     return {
       clicked: true,
-      btnText: applyBtn.innerText.trim(),
       x: Math.round(r.left + r.width / 2),
       y: Math.round(r.top + r.height / 2)
     };
@@ -175,70 +262,22 @@ async function clickYCApplyButton(ws, cdpEval) {
 }
 
 /**
- * Navigate back to the job listings page.
- */
-async function goBackToListings(ws, cdpEval) {
-  return await cdpEval(ws, `(() => {
-    // Try back button / breadcrumb
-    const backLink = document.querySelector('a[href*="/companies?"], a[href*="workatastartup.com/companies"]')
-      || Array.from(document.querySelectorAll('a')).find(a => {
-          const txt = (a.innerText || '').trim().toLowerCase();
-          return (txt === 'back' || txt === 'companies' || txt === 'jobs') && a.href.includes('workatastartup.com');
-        });
-
-    if (backLink) {
-      backLink.click();
-      return { navigated: true, href: backLink.href };
-    }
-
-    // Use history back
-    window.history.back();
-    return { navigated: true, method: 'history_back' };
-  })()`);
-}
-
-/**
- * Scroll the listings feed to load more jobs.
+ * Scroll the YC listings page to load more job cards.
  */
 async function scrollYCFeed(ws, cdpEval) {
   return await cdpEval(ws, `(() => {
-    const scroller = document.querySelector('[class*="job-list"], [class*="listings"], main, .content-container')
-      || document.documentElement;
-    const before = window.scrollY;
-    window.scrollBy({ top: 600, behavior: 'smooth' });
-    return { scrolled: true, before, after: window.scrollY };
-  })()`);
-}
-
-/**
- * Go to next page of YC listings (if pagination exists).
- * YC uses URL params like ?page=2 or scroll-based infinite loading.
- */
-async function goToNextYCPage(ws, cdpEval, currentPage) {
-  return await cdpEval(ws, `(() => {
-    // Look for explicit Next/pagination button
-    const nextBtn = Array.from(document.querySelectorAll('a, button')).find(b => {
-      const txt = (b.innerText || '').trim().toLowerCase();
-      const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-      return (txt === 'next' || txt === 'next page' || aria === 'next page') && b.offsetWidth > 0;
-    });
-
-    if (nextBtn) {
-      nextBtn.click();
-      return { success: true, method: 'next_button' };
-    }
-
-    // YC uses infinite scroll - just scroll to bottom
-    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
-    return { success: true, method: 'infinite_scroll' };
+    window.scrollBy({ top: 700, behavior: 'smooth' });
+    return { scrolled: true };
   })()`);
 }
 
 module.exports = {
-  selectNextYCJob,
-  inspectYCJob,
-  clickYCApplyButton,
-  goBackToListings,
-  scrollYCFeed,
-  goToNextYCPage
+  findNextYCCard,
+  clickApplyOnCard,
+  waitForNewTab,
+  getAllTabs,
+  closeTab,
+  inspectJobDetailPage,
+  clickApplyOnDetailPage,
+  scrollYCFeed
 };
