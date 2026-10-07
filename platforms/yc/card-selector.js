@@ -145,8 +145,11 @@ async function inspectJobDetailPage(ws, cdpEval) {
       const href = el.href || '';
       return href.includes('/companies/') && el.innerText.trim().length > 1;
     }) || document.querySelector('[class*="company-name"], [class*="company"] h1, [class*="company"] h2');
-    let company = companyEl ? companyEl.innerText.trim().split('\\n')[0] : '';
-    company = company.replace(/\\s*\\([A-Z]\\d+\\).*$/, '').trim();
+    let company = companyEl ? companyEl.innerText.trim().split('\n')[0] : '';
+    company = company.replace(/\s*\|.*$/g, '').replace(/\s*\([A-Za-z0-9]+\).*$/g, '').trim();
+    if (!company && document.title.includes(' at ')) {
+      company = document.title.split(' at ')[1]?.split('|')[0]?.split('(')[0]?.trim() || '';
+    }
 
     // Description
     const descContainers = [
@@ -162,18 +165,22 @@ async function inspectJobDetailPage(ws, cdpEval) {
     const techTags = Array.from(document.querySelectorAll('[class*="tag"], [class*="badge"], [class*="tech"], [class*="skill"], [class*="stack"]'))
       .map(t => t.innerText.trim()).filter(t => t.length > 0 && t.length < 40).join(', ');
 
-    // Check if already applied
-    const bodyText = document.body.innerText;
-    const isAlreadyApplied = Array.from(document.querySelectorAll('a, button, span, div')).some(el => {
+    // Find the real Apply button (ignore any HUD elements)
+    const applyEl = Array.from(document.querySelectorAll('a, button')).find(el => {
+      if (el.closest('#biotailr-hud')) return false;
       const txt = (el.innerText || '').trim().toLowerCase();
-      return txt === 'applied' && el.offsetWidth > 0;
+      return (txt === 'apply' || txt === 'apply now') && el.offsetWidth > 0;
     });
 
-    // Apply button - look for element with text "Apply" and orange/brand styling
-    const applyEl = Array.from(document.querySelectorAll('a, button')).find(el => {
+    // Check if the apply button itself says 'Applied'
+    const appliedBtn = Array.from(document.querySelectorAll('a, button')).find(el => {
+      if (el.closest('#biotailr-hud')) return false;
       const txt = (el.innerText || '').trim().toLowerCase();
-      return txt === 'apply' && el.offsetWidth > 0;
+      return (txt === 'applied' || txt === 'already applied') && el.offsetWidth > 0;
     });
+
+    const isAlreadyApplied = Boolean(appliedBtn) && !applyEl;
+    const hasApplyButton = Boolean(applyEl);
 
     let applyX = 0, applyY = 0;
     if (applyEl) {
@@ -190,7 +197,7 @@ async function inspectJobDetailPage(ws, cdpEval) {
       description,
       techStack: techTags,
       isAlreadyApplied,
-      hasApplyButton: Boolean(applyEl) && !isAlreadyApplied,
+      hasApplyButton,
       applyX,
       applyY,
       applyTag: applyEl ? applyEl.tagName : ''
@@ -204,8 +211,9 @@ async function inspectJobDetailPage(ws, cdpEval) {
 async function clickApplyOnDetailPage(ws, cdpEval) {
   const result = await cdpEval(ws, `(() => {
     const applyEl = Array.from(document.querySelectorAll('a, button')).find(el => {
+      if (el.closest('#biotailr-hud')) return false;
       const txt = (el.innerText || '').trim().toLowerCase();
-      return txt === 'apply' && el.offsetWidth > 0;
+      return (txt === 'apply' || txt === 'apply now') && el.offsetWidth > 0;
     });
 
     if (!applyEl) return { clicked: false, reason: 'no_apply_element' };
