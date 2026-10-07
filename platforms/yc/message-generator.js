@@ -82,7 +82,7 @@ function generateYCMessage(jobInfo, profile) {
 I'm writing to express my strong interest in the ${t} role at ${c}. ${hook}
 
 Key Projects & Contributions:
-• BioTailr AI: Autonomous multi-agent desktop application engine & Chrome DevTools Protocol automation (github.com/RNS-Forge/BioTailr-AI-StandBy)
+• BioTailr AI: Autonomous multi-agent job platform & desktop automation (rns-forge.github.io/BioTailr-AI)
 • Agentium (PyPI): Open-source Python library for agentic AI systems, enabling 12k+ developers to deploy intelligent agents (pypi.org/project/agentium)
 • Faculties.ai: Contributor & frontend developer for AI-driven academic workflow platform (faculties.ai)
 • AgriBridge: Global agri-trade platform connecting farmers, exporters, and importers
