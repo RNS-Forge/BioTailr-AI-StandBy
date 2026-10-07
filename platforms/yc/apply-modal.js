@@ -1,275 +1,305 @@
 /**
  * BioTailr AI StandBy - YC Apply Modal Solver
- * Handles the "Reach out to [recruiter] at [company]" popup modal:
- *  - Fills the personalized message textarea
- *  - Checks the location/relocation checkbox if present
- *  - Clicks "Send"
- *  - Detects success / error states
+ *
+ * Handles the "Reach out to X at Y" popup modal on workatastartup.com/jobs/NNNN:
+ *  1. Detect modal open state & extract recruiter/company
+ *  2. Click textarea input box area to focus it
+ *  3. Paste/insert generated message (satisfies 50-char minimum & React onChange)
+ *  4. Check location acknowledgement checkbox if present
+ *  5. Click the Send button (CDP mouse events + click)
+ *  6. Verify application sent & close modal if needed
  */
 
 /**
- * Check if the YC apply modal is currently open.
- * Returns { open: bool, recruiterName, companyName, hasLocationCheckbox }
+ * Check if the YC apply modal is open on the current page.
  */
 async function getYCModalStatus(ws, cdpEval) {
   return await cdpEval(ws, `(() => {
-    // Check for "Reach out to X at Y" modal
-    const modal = document.querySelector('.apply-modal, [class*="apply-modal"], .modal-container, [class*="modal-container"]')
-      || Array.from(document.querySelectorAll('div')).find(d => {
-          const txt = (d.innerText || '').toLowerCase();
-          return txt.includes('reach out to') && txt.includes('start a conversation') && d.offsetWidth > 0;
-        });
+    // 1. Check for textarea in document
+    const textarea = document.querySelector('textarea');
+    
+    // Check if there is an open modal/dialog or popup container
+    const modalContainers = Array.from(document.querySelectorAll('div[role="dialog"], div.fixed, div[class*="fixed"], div[class*="modal"], div.bg-white.rounded-lg, div.bg-white.shadow'));
+    const modal = modalContainers.find(d => {
+      if (d.offsetWidth <= 0 || d.offsetHeight <= 0) return false;
+      const txt = (d.innerText || '').toLowerCase();
+      return (txt.includes('reach out to') || txt.includes('start a conversation') || (txt.includes('send') && txt.includes('close'))) && d.querySelector('textarea');
+    }) || (textarea ? textarea.closest('div.fixed, div[role="dialog"], div.bg-white') || textarea.parentElement?.parentElement?.parentElement : null);
 
-    if (!modal) return { open: false };
-
-    const heading = modal.querySelector('h1, h2, h3, [class*="heading"], [class*="title"]');
-    const headingText = heading ? heading.innerText.trim() : '';
-
-    // Parse "Reach out to [Name] at [Company]"
-    const match = headingText.match(/reach out to (.+?) at (.+)/i);
-    const recruiterName = match ? match[1].trim() : '';
-    const companyName = match ? match[2].trim() : '';
-
-    const textarea = modal.querySelector('textarea');
-    const sendBtn = Array.from(modal.querySelectorAll('button')).find(b =>
-      /send/i.test(b.innerText.trim()) && b.offsetWidth > 0
-    );
-    const closeBtn = Array.from(modal.querySelectorAll('button')).find(b =>
-      /close|cancel|dismiss/i.test(b.innerText.trim()) && b.offsetWidth > 0
-    );
-
-    const locationCheckbox = modal.querySelector('input[type="checkbox"]');
-    const hasLocationCheckbox = Boolean(locationCheckbox);
-    const locationChecked = locationCheckbox ? locationCheckbox.checked : false;
-
-    const errorMsg = modal.querySelector('[class*="error"], .error-text, [style*="color: red"]');
-    const successMsg = modal.querySelector('[class*="success"], [class*="sent"], [class*="thank"]');
-
-    return {
-      open: true,
-      headingText,
-      recruiterName,
-      companyName,
-      hasTextarea: Boolean(textarea),
-      textareaValue: textarea ? textarea.value : '',
-      hasSendBtn: Boolean(sendBtn),
-      hasCloseBtn: Boolean(closeBtn),
-      hasLocationCheckbox,
-      locationChecked,
-      errorText: errorMsg ? errorMsg.innerText.trim() : '',
-      successText: successMsg ? successMsg.innerText.trim() : '',
-      isSent: Boolean(successMsg) || headingText.toLowerCase().includes('sent') || headingText.toLowerCase().includes('thank')
-    };
-  })()`);
-}
-
-/**
- * Fill the message textarea with the generated personalized message.
- * Uses native input setter to trigger React state updates.
- */
-async function fillYCMessageTextarea(ws, cdpEval, message) {
-  const result = await cdpEval(ws, `(() => {
-    const modal = document.querySelector('.apply-modal, [class*="apply-modal"], .modal-container, [class*="modal-container"]')
-      || Array.from(document.querySelectorAll('div')).find(d => {
-          const txt = (d.innerText || '').toLowerCase();
-          return txt.includes('reach out to') && txt.includes('start a conversation') && d.offsetWidth > 0;
-        });
-
-    if (!modal) return { filled: false, reason: 'no_modal' };
-
-    const textarea = modal.querySelector('textarea');
-    if (!textarea) return { filled: false, reason: 'no_textarea' };
-
-    // Use React's native setter to properly trigger state update
-    const nativeProto = window.HTMLTextAreaElement?.prototype;
-    const setter = Object.getOwnPropertyDescriptor(nativeProto || {}, 'value')?.set
-      || Object.getOwnPropertyDescriptor(textarea.__proto__ || {}, 'value')?.set;
-
-    const msg = ${JSON.stringify(message)};
-
-    if (setter) {
-      setter.call(textarea, msg);
-    } else {
-      textarea.value = msg;
+    if (!textarea && !modal) {
+      return { open: false };
     }
 
-    textarea.dispatchEvent(new Event('focus', { bubbles: true }));
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    textarea.dispatchEvent(new Event('change', { bubbles: true }));
+    const container = modal || document.body;
+    const allText = container.innerText || '';
 
-    const r = textarea.getBoundingClientRect();
+    // Heading text: "Reach out to {Name} at {Company}"
+    const headEl = container.querySelector('h1, h2, h3, [class*="heading"], [class*="title"]') ||
+                   Array.from(container.querySelectorAll('div')).find(d => (d.innerText || '').includes('Reach out to'));
+    const headingText = headEl ? headEl.innerText.trim() : '';
+    const match = headingText.match(/reach out to (.+?) at (.+)/i);
+
+    // Send button: orange button with text "Send"
+    const sendBtn = Array.from(container.querySelectorAll('button, input[type="submit"], a')).find(b => {
+      const txt = (b.innerText || '').trim().toLowerCase();
+      return txt === 'send' && b.offsetWidth > 0;
+    });
+
+    // Close button
+    const closeBtn = Array.from(container.querySelectorAll('button, a')).find(b => {
+      const txt = (b.innerText || '').trim().toLowerCase();
+      return (txt === 'close' || txt === 'cancel' || txt === '×') && b.offsetWidth > 0;
+    });
+
+    // Location / acknowledgement checkbox
+    const checkbox = container.querySelector('input[type="checkbox"]');
+
+    // Error text (e.g. "Please write at least 50 characters")
+    const errorEl = Array.from(container.querySelectorAll('p, span, div')).find(el => {
+      const txt = (el.innerText || '').toLowerCase();
+      return (txt.includes('at least') && txt.includes('character')) || txt.includes('required') || txt.includes('error');
+    });
+
+    // Success detection
+    const isSent = /thank you for applying|application sent|conversation started|your message was sent/i.test(allText);
+
+    // Textarea coordinates for clicking
+    let taX = 0, taY = 0;
+    if (textarea) {
+      textarea.scrollIntoView({ behavior: 'instant', block: 'center' });
+      const r = textarea.getBoundingClientRect();
+      taX = Math.round(r.left + r.width / 2);
+      taY = Math.round(r.top + r.height / 2);
+    }
+
+    // Send button coordinates
+    let sendX = 0, sendY = 0;
+    if (sendBtn) {
+      const r = sendBtn.getBoundingClientRect();
+      sendX = Math.round(r.left + r.width / 2);
+      sendY = Math.round(r.top + r.height / 2);
+    }
+
     return {
-      filled: true,
-      length: textarea.value.length,
-      x: Math.round(r.left + r.width / 2),
-      y: Math.round(r.top + r.height / 2)
+      open: Boolean(textarea || modal),
+      headingText,
+      recruiterName: match ? match[1].trim() : '',
+      companyName: match ? match[2].trim() : '',
+      hasTextarea: Boolean(textarea),
+      textareaValue: textarea ? textarea.value : '',
+      textareaX: taX,
+      textareaY: taY,
+      hasSendBtn: Boolean(sendBtn),
+      sendX,
+      sendY,
+      hasCloseBtn: Boolean(closeBtn),
+      hasLocationCheckbox: Boolean(checkbox),
+      locationChecked: checkbox ? checkbox.checked : false,
+      errorText: errorEl ? errorEl.innerText.trim() : '',
+      isSent
     };
   })()`);
-
-  return result;
 }
 
 /**
- * Check and tick the location/relocation checkbox if present and unchecked.
+ * Click inside the textarea input box area and paste/insert the generated text.
+ */
+async function fillYCMessageTextarea(ws, cdpEval, message) {
+  const delay = ms => new Promise(r => setTimeout(r, ms));
+
+  // 1. Get textarea location
+  const status = await getYCModalStatus(ws, cdpEval);
+  if (!status || !status.open || !status.hasTextarea) {
+    return { filled: false, reason: 'no_textarea' };
+  }
+
+  const { textareaX, textareaY } = status;
+
+  // 2. Click inside the input box area (CDP mouse events)
+  if (textareaX && textareaY) {
+    ws.send(JSON.stringify({
+      id: Math.floor(Math.random() * 1e6),
+      method: 'Input.dispatchMouseEvent',
+      params: { type: 'mousePressed', x: textareaX, y: textareaY, button: 'left', clickCount: 1 }
+    }));
+    await delay(60);
+    ws.send(JSON.stringify({
+      id: Math.floor(Math.random() * 1e6),
+      method: 'Input.dispatchMouseEvent',
+      params: { type: 'mouseReleased', x: textareaX, y: textareaY, button: 'left', clickCount: 1 }
+    }));
+    await delay(150);
+  }
+
+  // 3. Focus and select all to clear any placeholder
+  await cdpEval(ws, `(() => {
+    const ta = document.querySelector('textarea');
+    if (ta) {
+      ta.focus();
+      ta.select();
+    }
+  })()`);
+  await delay(100);
+
+  // 4. Select all (Ctrl+A) and Backspace via CDP key events
+  ws.send(JSON.stringify({
+    id: Math.floor(Math.random() * 1e6),
+    method: 'Input.dispatchKeyEvent',
+    params: { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 2 }
+  }));
+  await delay(50);
+  ws.send(JSON.stringify({
+    id: Math.floor(Math.random() * 1e6),
+    method: 'Input.dispatchKeyEvent',
+    params: { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 2 }
+  }));
+  await delay(50);
+  ws.send(JSON.stringify({
+    id: Math.floor(Math.random() * 1e6),
+    method: 'Input.dispatchKeyEvent',
+    params: { type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 }
+  }));
+  await delay(50);
+  ws.send(JSON.stringify({
+    id: Math.floor(Math.random() * 1e6),
+    method: 'Input.dispatchKeyEvent',
+    params: { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 }
+  }));
+  await delay(100);
+
+  // 5. Type / insert text via CDP Input.insertText (triggers React state updates)
+  ws.send(JSON.stringify({
+    id: Math.floor(Math.random() * 1e6),
+    method: 'Input.insertText',
+    params: { text: message }
+  }));
+  await delay(400);
+
+  // 6. Native value setter backup to ensure React state is 100% synchronized
+  await cdpEval(ws, `(() => {
+    const ta = document.querySelector('textarea');
+    if (ta && ta.value.length < 50) {
+      const proto = window.HTMLTextAreaElement.prototype;
+      const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+      if (nativeSetter) {
+        nativeSetter.call(ta, ${JSON.stringify(message)});
+      } else {
+        ta.value = ${JSON.stringify(message)};
+      }
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+      ta.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  })()`);
+  await delay(200);
+
+  // 7. Verify final text value and length
+  const verify = await cdpEval(ws, `(() => {
+    const ta = document.querySelector('textarea');
+    return {
+      length: ta ? ta.value.length : 0,
+      value: ta ? ta.value : ''
+    };
+  })()`);
+
+  const ok = Boolean(verify && verify.length >= 50);
+  return { filled: ok, length: verify?.length || 0, value: verify?.value || '' };
+}
+
+/**
+ * Handle any checkbox inside the modal (e.g. location acknowledgement).
  */
 async function handleLocationCheckbox(ws, cdpEval) {
   return await cdpEval(ws, `(() => {
-    const modal = document.querySelector('.apply-modal, [class*="apply-modal"], .modal-container, [class*="modal-container"]')
-      || Array.from(document.querySelectorAll('div')).find(d => {
-          const txt = (d.innerText || '').toLowerCase();
-          return txt.includes('reach out to') && txt.includes('start a conversation') && d.offsetWidth > 0;
-        });
-
-    if (!modal) return { handled: false };
-
-    const checkbox = modal.querySelector('input[type="checkbox"]');
-    if (!checkbox) return { handled: false, reason: 'no_checkbox' };
-
-    if (!checkbox.checked) {
-      checkbox.click();
-      checkbox.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-
-    return { handled: true, checked: checkbox.checked };
+    const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+    let checkedCount = 0;
+    checkboxes.forEach(cb => {
+      if (!cb.checked && cb.offsetWidth > 0) {
+        cb.click();
+        cb.dispatchEvent(new Event('change', { bubbles: true }));
+        checkedCount++;
+      }
+    });
+    return { handled: true, checkedCount };
   })()`);
 }
 
 /**
- * Click the Send button in the YC apply modal.
- * Returns { clicked, x, y } for CDP mouse dispatch.
+ * Click the Send button inside the modal using CDP mouse events + native click.
  */
 async function clickYCSendButton(ws, cdpEval) {
-  const result = await cdpEval(ws, `(() => {
-    const modal = document.querySelector('.apply-modal, [class*="apply-modal"], .modal-container, [class*="modal-container"]')
-      || Array.from(document.querySelectorAll('div')).find(d => {
-          const txt = (d.innerText || '').toLowerCase();
-          return txt.includes('reach out to') && txt.includes('start a conversation') && d.offsetWidth > 0;
-        });
+  const delay = ms => new Promise(r => setTimeout(r, ms));
 
-    if (!modal) return { clicked: false, reason: 'no_modal' };
+  // Find Send button coordinates
+  const sendInfo = await cdpEval(ws, `(() => {
+    const btn = Array.from(document.querySelectorAll('button, input[type="submit"]')).find(b => {
+      const txt = (b.innerText || '').trim().toLowerCase();
+      return txt === 'send' && b.offsetWidth > 0;
+    });
+    if (!btn) return { found: false };
 
-    const sendBtn = Array.from(modal.querySelectorAll('button')).find(b =>
-      /send/i.test(b.innerText.trim()) && b.offsetWidth > 0
-    );
-    if (!sendBtn) return { clicked: false, reason: 'no_send_btn' };
-
-    sendBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
-    const r = sendBtn.getBoundingClientRect();
-
-    sendBtn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
-    sendBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-    sendBtn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
-    sendBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-    sendBtn.click();
-
+    btn.scrollIntoView({ behavior: 'instant', block: 'center' });
+    const r = btn.getBoundingClientRect();
     return {
-      clicked: true,
-      btnText: sendBtn.innerText.trim(),
+      found: true,
       x: Math.round(r.left + r.width / 2),
-      y: Math.round(r.top + r.height / 2)
+      y: Math.round(r.top + r.height / 2),
+      className: btn.className,
+      disabled: btn.disabled
     };
   })()`);
 
-  if (result && result.clicked && result.x && result.y) {
+  if (!sendInfo || !sendInfo.found) {
+    return { clicked: false, reason: 'send_button_not_found' };
+  }
+
+  if (sendInfo.disabled) {
+    return { clicked: false, reason: 'send_button_disabled' };
+  }
+
+  // 1. CDP mouse click on Send button
+  if (sendInfo.x && sendInfo.y) {
     ws.send(JSON.stringify({
-      id: Math.floor(Math.random() * 1000000),
+      id: Math.floor(Math.random() * 1e6),
       method: 'Input.dispatchMouseEvent',
-      params: { type: 'mousePressed', x: result.x, y: result.y, button: 'left', clickCount: 1 }
+      params: { type: 'mousePressed', x: sendInfo.x, y: sendInfo.y, button: 'left', clickCount: 1 }
     }));
-    await new Promise(r => setTimeout(r, 50));
+    await delay(80);
     ws.send(JSON.stringify({
-      id: Math.floor(Math.random() * 1000000),
+      id: Math.floor(Math.random() * 1e6),
       method: 'Input.dispatchMouseEvent',
-      params: { type: 'mouseReleased', x: result.x, y: result.y, button: 'left', clickCount: 1 }
+      params: { type: 'mouseReleased', x: sendInfo.x, y: sendInfo.y, button: 'left', clickCount: 1 }
     }));
   }
 
-  return result;
+  await delay(100);
+
+  // 2. Also dispatch DOM click event as guarantee
+  await cdpEval(ws, `(() => {
+    const btn = Array.from(document.querySelectorAll('button, input[type="submit"]')).find(b => {
+      return (b.innerText || '').trim().toLowerCase() === 'send' && b.offsetWidth > 0;
+    });
+    if (btn) btn.click();
+  })()`);
+
+  return { clicked: true, x: sendInfo.x, y: sendInfo.y };
 }
 
 /**
- * Dismiss the modal after sending (click Close if still open).
+ * Dismiss the modal if needed (click Close or press Escape).
  */
 async function dismissYCModal(ws, cdpEval) {
   return await cdpEval(ws, `(() => {
-    const modal = document.querySelector('.apply-modal, [class*="apply-modal"], .modal-container, [class*="modal-container"]')
-      || Array.from(document.querySelectorAll('div')).find(d => {
-          const txt = (d.innerText || '').toLowerCase();
-          return (txt.includes('reach out to') || txt.includes('sent') || txt.includes('application submitted')) && d.offsetWidth > 0;
-        });
-
-    if (!modal) return { dismissed: false, reason: 'no_modal' };
-
-    const closeBtn = Array.from(modal.querySelectorAll('button')).find(b => {
-      const t = b.innerText.trim().toLowerCase();
-      const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-      return t === 'close' || t === 'done' || t === 'cancel' || aria === 'close' || aria === 'dismiss';
-    }) || modal.querySelector('[aria-label="Close"], [aria-label="Dismiss"], .close-btn, [class*="close"]');
-
-    if (closeBtn && closeBtn.offsetWidth > 0) {
+    const closeBtn = Array.from(document.querySelectorAll('button')).find(b => {
+      const txt = (b.innerText || '').trim().toLowerCase();
+      return (txt === 'close' || txt === 'cancel' || txt === '×') && b.offsetWidth > 0;
+    });
+    if (closeBtn) {
       closeBtn.click();
-      return { dismissed: true };
+      return { dismissed: true, method: 'close_button' };
     }
-
-    // Try pressing Escape key via event
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
     return { dismissed: true, method: 'escape' };
   })()`);
-}
-
-/**
- * Full apply flow: fill message → check location → click Send → verify
- * Returns 'submitted' | 'failed' | 'modal_not_open'
- */
-async function solveYCApplyModal(ws, cdpEval, message) {
-  const status = await getYCModalStatus(ws, cdpEval);
-  if (!status || !status.open) return 'modal_not_open';
-
-  // Fill the textarea with personalized message
-  const filled = await fillYCMessageTextarea(ws, cdpEval, message);
-  if (!filled || !filled.filled) return 'fill_failed';
-
-  await new Promise(r => setTimeout(r, 300));
-
-  // Tick location checkbox if present (means open to relocation)
-  await handleLocationCheckbox(ws, cdpEval);
-  await new Promise(r => setTimeout(r, 200));
-
-  // Verify text was accepted (must be ≥50 chars)
-  const statusAfterFill = await getYCModalStatus(ws, cdpEval);
-  if (statusAfterFill && statusAfterFill.textareaValue.length < 50) {
-    // Re-try fill
-    await fillYCMessageTextarea(ws, cdpEval, message);
-    await new Promise(r => setTimeout(r, 300));
-  }
-
-  // Click Send
-  const sendResult = await clickYCSendButton(ws, cdpEval);
-  if (!sendResult || !sendResult.clicked) return 'send_failed';
-
-  // Wait and verify success
-  await new Promise(r => setTimeout(r, 1200));
-
-  const postStatus = await getYCModalStatus(ws, cdpEval);
-  if (!postStatus || !postStatus.open || postStatus.isSent) {
-    return 'submitted';
-  }
-
-  // Check for error message
-  if (postStatus.errorText && postStatus.errorText.length > 0) {
-    // If "write at least 50 characters" error, re-fill and retry
-    if (postStatus.errorText.toLowerCase().includes('50') || postStatus.errorText.toLowerCase().includes('character')) {
-      await fillYCMessageTextarea(ws, cdpEval, message + ' I am excited to connect and share more about my background and how I can contribute to your team.');
-      await new Promise(r => setTimeout(r, 300));
-      const retryResult = await clickYCSendButton(ws, cdpEval);
-      await new Promise(r => setTimeout(r, 1200));
-      const retryStatus = await getYCModalStatus(ws, cdpEval);
-      if (!retryStatus || !retryStatus.open || retryStatus.isSent) return 'submitted';
-    }
-    return 'error: ' + postStatus.errorText;
-  }
-
-  return 'submitted';
 }
 
 module.exports = {
@@ -277,6 +307,5 @@ module.exports = {
   fillYCMessageTextarea,
   handleLocationCheckbox,
   clickYCSendButton,
-  dismissYCModal,
-  solveYCApplyModal
+  dismissYCModal
 };

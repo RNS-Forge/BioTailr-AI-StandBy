@@ -1,19 +1,12 @@
 /**
  * BioTailr AI StandBy - YC Card Selector & Tab Manager
  *
- * Real YC DOM structure (from debug):
+ * Real YC DOM structure:
  * - Listing page: workatastartup.com/companies?... or /jobs
- * - Each job has a "View job" link → opens same tab to /jobs/XXXXX
- * - On detail page: Apply is an <a> tag (not button) at top right
- * - Apply opens a modal on the SAME page (not new tab)
- *   OR navigates to a new URL
- *
- * Strategy:
- *  1. On listing page: find all "View job" <a href="/jobs/..."> links
- *  2. Navigate to each one (same tab)
- *  3. On detail page: click the Apply <a> button
- *  4. Fill the modal textarea → Send
- *  5. Navigate back to listing page
+ * - Each job has a link / button to /jobs/XXXXX
+ * - Opening the job in a new tab keeps the listing page intact
+ * - On detail page: Apply is an orange <a>/button element
+ * - Clicking Apply opens the modal popup on the detail page
  */
 
 const http = require('http');
@@ -31,7 +24,6 @@ async function findNextYCJobLink(ws, cdpEval, visitedKeys) {
     // Find all job links: both title links and "View job" links
     const allJobLinks = Array.from(document.querySelectorAll('a[href*="/jobs/"]')).filter(a => {
       const href = a.href || '';
-      // Only actual job detail links (not category pages like /jobs/l/...)
       return /\\/jobs\\/\\d+/.test(href) && a.offsetWidth > 0;
     });
 
@@ -77,7 +69,6 @@ async function findNextYCJobLink(ws, cdpEval, visitedKeys) {
       const lines = info.cardSnippet.split('\\n').map(l => l.trim()).filter(l => l.length > 2);
       const title = lines[0] || info.title;
       let company = '';
-      // Company is usually in format "CompanyName (W22)" or similar
       const compLine = lines.find(l => /\\([A-Z]\\d+\\)/.test(l) || /•/.test(l));
       if (compLine) {
         company = compLine.split('•')[0].trim().replace(/\\s*\\([A-Z]\\d+\\).*$/, '').trim();
@@ -98,36 +89,43 @@ async function findNextYCJobLink(ws, cdpEval, visitedKeys) {
 }
 
 /**
- * Navigate to a job detail page URL (same tab).
+ * Open a job URL in a new Chrome tab via CDP HTTP endpoint.
  */
-async function navigateToJob(ws, cdpEval, href) {
-  return await cdpEval(ws, `(() => {
-    window.location.href = ${JSON.stringify(href)};
-    return { navigating: true, href: ${JSON.stringify(href)} };
-  })()`);
+function openJobInNewTab(port = 9222, href) {
+  return new Promise((resolve, reject) => {
+    const encoded = encodeURIComponent(href);
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port,
+      path: `/json/new?${encoded}`,
+      method: 'PUT'
+    }, res => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    req.on('error', reject);
+    req.end();
+  });
 }
 
 /**
- * Wait for a page to finish loading (URL changes).
+ * Close a Chrome tab via CDP HTTP endpoint.
  */
-async function waitForPageLoad(ws, cdpEval, expectedUrlPart, timeoutMs = 8000) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    await new Promise(r => setTimeout(r, 400));
-    const url = await cdpEval(ws, `window.location.href`);
-    if (url && url.includes(expectedUrlPart)) return true;
-  }
-  return false;
-}
-
-/**
- * Navigate back to the listing page.
- */
-async function navigateBack(ws, cdpEval, listingUrl) {
-  return await cdpEval(ws, `(() => {
-    window.history.back();
-    return { back: true };
-  })()`);
+function closeTab(port = 9222, tabId) {
+  return new Promise(resolve => {
+    const req = http.get(`http://127.0.0.1:${port}/json/close/${tabId}`, res => {
+      resolve();
+    });
+    req.on('error', () => resolve());
+    req.setTimeout(3000, () => { req.destroy(); resolve(); });
+  });
 }
 
 /**
@@ -164,7 +162,14 @@ async function inspectJobDetailPage(ws, cdpEval) {
     const techTags = Array.from(document.querySelectorAll('[class*="tag"], [class*="badge"], [class*="tech"], [class*="skill"], [class*="stack"]'))
       .map(t => t.innerText.trim()).filter(t => t.length > 0 && t.length < 40).join(', ');
 
-    // Apply button - it's an <a> tag in YC
+    // Check if already applied
+    const bodyText = document.body.innerText;
+    const isAlreadyApplied = Array.from(document.querySelectorAll('a, button, span, div')).some(el => {
+      const txt = (el.innerText || '').trim().toLowerCase();
+      return txt === 'applied' && el.offsetWidth > 0;
+    });
+
+    // Apply button - look for element with text "Apply" and orange/brand styling
     const applyEl = Array.from(document.querySelectorAll('a, button')).find(el => {
       const txt = (el.innerText || '').trim().toLowerCase();
       return txt === 'apply' && el.offsetWidth > 0;
@@ -172,6 +177,7 @@ async function inspectJobDetailPage(ws, cdpEval) {
 
     let applyX = 0, applyY = 0;
     if (applyEl) {
+      applyEl.scrollIntoView({ behavior: 'instant', block: 'center' });
       const r = applyEl.getBoundingClientRect();
       applyX = Math.round(r.left + r.width / 2);
       applyY = Math.round(r.top + r.height / 2);
@@ -183,7 +189,8 @@ async function inspectJobDetailPage(ws, cdpEval) {
       company: company || document.title.split(' at ')[1]?.split('(')[0]?.trim() || '',
       description,
       techStack: techTags,
-      hasApplyButton: Boolean(applyEl),
+      isAlreadyApplied,
+      hasApplyButton: Boolean(applyEl) && !isAlreadyApplied,
       applyX,
       applyY,
       applyTag: applyEl ? applyEl.tagName : ''
@@ -192,7 +199,7 @@ async function inspectJobDetailPage(ws, cdpEval) {
 }
 
 /**
- * Click the Apply button on the job detail page using CDP mouse events.
+ * Click the Apply button on the job detail page using CDP mouse events + native click.
  */
 async function clickApplyOnDetailPage(ws, cdpEval) {
   const result = await cdpEval(ws, `(() => {
@@ -206,7 +213,7 @@ async function clickApplyOnDetailPage(ws, cdpEval) {
     applyEl.scrollIntoView({ behavior: 'instant', block: 'center' });
     const r = applyEl.getBoundingClientRect();
 
-    // Fire full event sequence
+    // Fire event sequence
     applyEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
     applyEl.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
     applyEl.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
@@ -217,7 +224,6 @@ async function clickApplyOnDetailPage(ws, cdpEval) {
     return {
       clicked: true,
       tag: applyEl.tagName,
-      href: applyEl.href || '',
       x: Math.round(r.left + r.width / 2),
       y: Math.round(r.top + r.height / 2)
     };
@@ -241,57 +247,7 @@ async function clickApplyOnDetailPage(ws, cdpEval) {
 }
 
 /**
- * Get list of all open Chrome tabs.
- */
-function getAllTabs(port = 9222) {
-  return new Promise((resolve, reject) => {
-    const req = http.get(`http://127.0.0.1:9222/json`, res => {
-      let data = '';
-      res.on('data', c => data += c);
-      res.on('end', () => {
-        try { resolve(JSON.parse(data)); }
-        catch (e) { reject(e); }
-      });
-    });
-    req.on('error', reject);
-    req.setTimeout(3000, () => { req.destroy(); reject(new Error('Timeout')); });
-  });
-}
-
-/**
- * Wait for a new tab to appear.
- */
-async function waitForNewTab(port, knownTabIds, timeoutMs = 6000) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    await new Promise(r => setTimeout(r, 350));
-    try {
-      const tabs = await getAllTabs(port);
-      const newTab = tabs.find(t =>
-        t.type === 'page' && t.url && !knownTabIds.has(t.id) &&
-        !t.url.startsWith('chrome://') && !t.url.startsWith('about:')
-      );
-      if (newTab) return newTab;
-    } catch (_) {}
-  }
-  return null;
-}
-
-/**
- * Close a tab by target ID.
- */
-function closeTab(port, targetId) {
-  return new Promise(resolve => {
-    http.get(`http://127.0.0.1:9222/json/close/${targetId}`, res => {
-      let d = '';
-      res.on('data', c => d += c);
-      res.on('end', () => resolve(d));
-    }).on('error', () => resolve('error'));
-  });
-}
-
-/**
- * Scroll the page down to reveal more job cards.
+ * Scroll the listing page feed down to load more cards.
  */
 async function scrollYCFeed(ws, cdpEval) {
   return await cdpEval(ws, `(() => {
@@ -302,13 +258,9 @@ async function scrollYCFeed(ws, cdpEval) {
 
 module.exports = {
   findNextYCJobLink,
-  navigateToJob,
-  waitForPageLoad,
-  navigateBack,
+  openJobInNewTab,
+  closeTab,
   inspectJobDetailPage,
   clickApplyOnDetailPage,
-  getAllTabs,
-  waitForNewTab,
-  closeTab,
   scrollYCFeed
 };
