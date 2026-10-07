@@ -1,7 +1,12 @@
 /**
  * BioTailr AI StandBy - YC Work at a Startup Message Generator
  * Generates compelling, highly professional outreach messages tailored to each job.
- * Authored by Sanjay N, featuring top projects with links, contact details, and clean mission hooks.
+ * Authored by Sanjay N, featuring top projects with links from ATS Resume:
+ * - BioTailr AI
+ * - Agentium (PyPI) (12k+ developers)
+ * - AgriBridge
+ * - Furry Funds AI
+ * - Contributor to Faculties.ai
  */
 
 function cleanTitle(rawTitle) {
@@ -28,14 +33,12 @@ function extractCompanyMission(description, companyName) {
     return `${companyName}'s mission and engineering challenges caught my attention.`;
   }
 
-  // Look for section after "About {Company}"
   const aboutIdx = description.toLowerCase().indexOf('about ' + companyName.toLowerCase());
   let targetText = description;
   if (aboutIdx !== -1) {
     targetText = description.substring(aboutIdx + ('about ' + companyName).length);
   }
 
-  // Filter out short tags, buttons, UI words
   const lines = targetText.split('\n')
     .map(l => l.trim())
     .filter(l => {
@@ -56,7 +59,7 @@ function extractCompanyMission(description, companyName) {
 }
 
 /**
- * Generate a professional, high-impact outreach message for Sanjay N.
+ * Generate a professional, high-impact outreach message for Sanjay N based on ATS Resume.
  * @param {Object} jobInfo - { title, company, description, techStack }
  * @param {Object} profile - candidate profile from candidate-profile.json
  * @returns {string} Professional message with top projects, links, and contact info
@@ -64,9 +67,6 @@ function extractCompanyMission(description, companyName) {
 function generateYCMessage(jobInfo, profile) {
   const firstName = profile?.personal?.firstName || 'Sanjay';
   const lastName = profile?.personal?.lastName || 'N';
-  const currentRole = profile?.experience?.currentTitle || 'Full Stack & AI Engineer';
-  const currentCompany = profile?.experience?.currentCompany || 'Axodian';
-  const expYears = profile?.experience?.totalYears || 1;
   const email = profile?.personal?.email || '2005sanjaynrs@gmail.com';
   const phone = profile?.personal?.phone || '+91 9361599018';
   const portfolio = profile?.personal?.portfolioUrl || 'https://rns-forge.github.io/RNS_Professional_Profile/';
@@ -77,14 +77,16 @@ function generateYCMessage(jobInfo, profile) {
   const c = cleanCompany(jobInfo.company, jobInfo.title);
   const hook = extractCompanyMission(jobInfo.description, c);
 
-  return `Hi! I'm ${firstName} ${lastName}, a ${currentRole} with ${expYears} year of experience building production AI agent pipelines and scalable backend systems at ${currentCompany}.
+  return `Hi! I'm ${firstName} ${lastName}, an AI & Software Engineer specializing in Agentic AI, RAG, and scalable enterprise systems.
 
 I'm writing to express my strong interest in the ${t} role at ${c}. ${hook}
 
-Top Projects & Core Capabilities:
-• BioTailr.ai: Autonomous AI agent platform built with Node.js & Chrome DevTools Protocol (github.com/RNS-Forge/BioTailr-AI-StandBy)
-• Production LLM & Agent Pipelines: Vector databases (RAG), FastAPI microservices, and high-throughput PostgreSQL backends at Axodian
-• Full-Stack AI Systems: Interactive React frontends coupled with robust Python/FastAPI services
+Key Projects & Contributions:
+• BioTailr AI: Autonomous multi-agent desktop application engine & Chrome DevTools Protocol automation (github.com/RNS-Forge/BioTailr-AI-StandBy)
+• Agentium (PyPI): Open-source Python library for agentic AI systems, enabling 12k+ developers to deploy intelligent agents (pypi.org/project/agentium)
+• Faculties.ai: Contributor & frontend developer for AI-driven academic workflow platform (faculties.ai)
+• AgriBridge: Global agri-trade platform connecting farmers, exporters, and importers
+• Furry Funds AI: AI-based risk screening & loan approval system (improved accuracy by 15%)
 
 Portfolio: ${portfolio}
 GitHub: ${github}
