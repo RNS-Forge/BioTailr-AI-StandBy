@@ -1,6 +1,20 @@
 /**
- * BioTailr AI StandBy - Autonomous Auto-Apply Runner Entrypoint
- * Platform-based architecture supporting LinkedIn, Indeed, and modern ATS engines.
+ * BioTailr AI StandBy - Naukri Auto-Apply Runner
+ *
+ * Usage:
+ *   1. Open Chrome with debugging:
+ *      chrome.exe --remote-debugging-port=9222 --user-data-dir="C:\ChromeDebug"
+ *   2. Navigate to: https://www.naukri.com/jobs-in-india (or any Naukri job search URL)
+ *   3. Run: node naukri-runner.js
+ *
+ * The runner will:
+ *  - Auto-detect the naukri.com tab
+ *  - Iterate through all job cards on the search results page
+ *  - Click each card -> click Apply button
+ *  - Solve chatbot / modal questions (CTC, notice period, experience, location)
+ *  - Submit application -> move to next job
+ *  - Track applied/failed in HUD overlay
+ *  - Repeat across pages until all jobs processed (unlimited by default)
  */
 
 const fs = require('fs');
@@ -38,7 +52,9 @@ let profile = {
   },
   education: {
     degree: 'Bachelor of Technology - BTech',
-    institution: 'Anna University / SNS College of Technology'
+    fieldOfStudy: 'Computer Science and Engineering',
+    institution: 'Anna University / SNS College of Technology',
+    gradYear: '2026'
   },
   settings: {
     batchTarget: 0, // 0 = unlimited continuous apply
@@ -50,7 +66,16 @@ try {
   const profilePath = path.join(__dirname, 'candidate-profile.json');
   if (fs.existsSync(profilePath)) {
     const raw = fs.readFileSync(profilePath, 'utf8');
-    profile = { ...profile, ...JSON.parse(raw) };
+    const loaded = JSON.parse(raw);
+    // Deep merge
+    profile = {
+      ...profile,
+      ...loaded,
+      personal: { ...profile.personal, ...loaded.personal },
+      experience: { ...profile.experience, ...loaded.experience },
+      education: { ...profile.education, ...loaded.education },
+      settings: { ...profile.settings, ...loaded.settings }
+    };
   }
 } catch (e) {
   log('WARN', 'Could not parse candidate-profile.json, using defaults.');
@@ -59,9 +84,12 @@ try {
 const cdpPort = profile.settings?.cdpPort || 9222;
 
 async function main() {
+  log('INIT', `BioTailr AI StandBy - Naukri Engine`);
   log('INIT', `Connecting to Chrome DevTools Protocol at 127.0.0.1:${cdpPort}...`);
 
-  const activeTab = await getTargetTab(cdpPort, ['linkedin.com/jobs', 'naukri.com', 'indeed.com/jobs', 'workatastartup.com']);
+  const activeTab = await getTargetTab(cdpPort, [
+    'naukri.com'
+  ]);
   log('CONNECTED', `Attached to tab: "${activeTab.title}" (${activeTab.url})`);
 
   const ws = await connectWebSocket(activeTab.webSocketDebuggerUrl);

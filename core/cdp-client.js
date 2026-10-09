@@ -47,7 +47,7 @@ async function getBrowserTabs(port = 9222) {
   }
 }
 
-async function getTargetTab(port = 9222, urlKeywords = ['linkedin.com/jobs', 'indeed.com/jobs', 'workatastartup.com', 'ycombinator.com/jobs']) {
+async function getTargetTab(port = 9222, urlKeywords = ['linkedin.com/jobs', 'naukri.com', 'indeed.com/jobs', 'workatastartup.com', 'ycombinator.com/jobs']) {
   const tabs = await getBrowserTabs(port);
   const pageTabs = tabs.filter(t => t.type === 'page' && t.url);
   
@@ -56,11 +56,11 @@ async function getTargetTab(port = 9222, urlKeywords = ['linkedin.com/jobs', 'in
     if (match) return match;
   }
 
-  // Fallback: any LinkedIn, Indeed, or YC page
-  const fallback = pageTabs.find(t => /linkedin\.com|indeed\.com|workatastartup\.com|ycombinator\.com/i.test(t.url));
+  // Fallback: any LinkedIn, Naukri, Indeed, or YC page
+  const fallback = pageTabs.find(t => /linkedin\.com|naukri\.com|indeed\.com|workatastartup\.com|ycombinator\.com/i.test(t.url));
   if (fallback) return fallback;
 
-  throw new Error('No active job board tab (LinkedIn / Indeed / YC) detected in Chrome. Please open job search results in the debugging Chrome window.');
+  throw new Error('No active job board tab (LinkedIn / Naukri / Indeed / YC) detected in Chrome. Please open job search results in the debugging Chrome window.');
 }
 
 async function connectWebSocket(webSocketDebuggerUrl) {

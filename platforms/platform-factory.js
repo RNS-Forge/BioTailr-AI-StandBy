@@ -6,6 +6,7 @@
 const LinkedInPlatform = require('./linkedin');
 const IndeedPlatform = require('./indeed');
 const YCPlatform = require('./yc');
+const NaukriPlatform = require('./naukri');
 
 class PlatformFactory {
   static createPlatform(tabUrl, ws, cdpEval, profile, helpers = {}) {
@@ -13,6 +14,10 @@ class PlatformFactory {
 
     if (url.includes('workatastartup.com') || url.includes('ycombinator.com/jobs')) {
       return new YCPlatform(ws, cdpEval, profile, helpers);
+    }
+
+    if (url.includes('naukri.com')) {
+      return new NaukriPlatform(ws, cdpEval, profile, helpers);
     }
 
     if (url.includes('linkedin.com')) {
