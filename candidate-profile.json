@@ -40,7 +40,7 @@
   "settings": {
     "batchTarget": 0,
     "cdpPort": 9222,
-    "scrollDelayMs": 350,
-    "actionDelayMs": 1000
+    "scrollDelayMs": 750,
+    "actionDelayMs": 2000
   }
 }

@@ -12,6 +12,7 @@ const {
   handleRemoveConfirmationDialog,
   handleProfilePrompt,
   handleSafetyReminder,
+  handleDeleteExperience,
   pruneEducation,
   solveFormFields,
   solveLocationTypeahead,
@@ -125,8 +126,15 @@ class LinkedInPlatform extends BasePlatform {
       if (this.helpers.sleep) await this.helpers.sleep(300);
     }
 
+    // 3b. Experience deletion if an unneeded experience block is open
+    await handleDeleteExperience(this.ws, this.cdpEval);
+    if (this.helpers.sleep) await this.helpers.sleep(300);
+
     // 4. Solve all inputs, selects, radios, checkboxes, and sub-forms
     await solveFormFields(this.ws, this.cdpEval, this.profile);
+
+    // 4b. Re-check if any delete experience was revealed
+    await handleDeleteExperience(this.ws, this.cdpEval);
 
     // 5. Ensure location typeahead dropdown is solved with Coimbatore, Tamil Nadu, India
     await solveLocationTypeahead(this.ws, this.cdpEval);
@@ -141,6 +149,10 @@ class LinkedInPlatform extends BasePlatform {
 
   async solveLocationTypeahead() {
     return await solveLocationTypeahead(this.ws, this.cdpEval);
+  }
+
+  async handleDeleteExperience() {
+    return await handleDeleteExperience(this.ws, this.cdpEval);
   }
 
   async tryAdvance() {

@@ -228,9 +228,12 @@ class Orchestrator {
             // Extra solve pass to fix any remaining validation errors
             await this.platform.solveCurrentStep(stepCount, stepStatus);
             await sleep(300);
-            // Also re-solve location typeahead in case it's blocking
+            // Also re-solve location typeahead and delete experience in case it's blocking
             if (this.platform.solveLocationTypeahead) {
               await this.platform.solveLocationTypeahead();
+            }
+            if (this.platform.handleDeleteExperience) {
+              await this.platform.handleDeleteExperience();
             }
             await sleep(200);
           }

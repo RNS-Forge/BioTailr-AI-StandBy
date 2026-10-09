@@ -180,6 +180,81 @@ async function pruneEducation(ws, cdpEval) {
   })()`);
 }
 
+async function handleDeleteExperience(ws, cdpEval) {
+  let deletedAny = false;
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const deleteBtnInfo = await cdpEval(ws, `(() => {
+      const modal = document.querySelector('dialog, [role="dialog"], .jobs-easy-apply-modal, .artdeco-modal');
+      if (!modal) return { found: false };
+
+      const btns = Array.from(modal.querySelectorAll('button, a[role="button"], [role="button"]')).filter(b => {
+        return (b.offsetWidth > 0 || b.offsetHeight > 0);
+      });
+
+      const delBtn = btns.find(b => {
+        const txt = (b.innerText || '').trim().toLowerCase();
+        const aria = (b.getAttribute('aria-label') || '').trim().toLowerCase();
+        const testId = (b.getAttribute('data-test-delete-btn') || b.getAttribute('data-control-name') || '').toLowerCase();
+
+        return txt === 'delete experience' || txt.includes('delete experience')
+          || txt === 'delete work experience' || txt.includes('delete work experience')
+          || txt === 'remove experience' || txt.includes('remove experience')
+          || aria.includes('delete experience') || aria.includes('delete work experience')
+          || aria.includes('remove experience') || aria.includes('remove work experience')
+          || (txt === 'delete' && Boolean(b.closest('[class*="experience"], [id*="experience"], .jobs-easy-apply-form-section__grouping')))
+          || testId.includes('delete');
+      });
+
+      if (!delBtn) return { found: false };
+
+      delBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
+      const r = delBtn.getBoundingClientRect();
+      delBtn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+      delBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      delBtn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
+      delBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+      delBtn.click();
+
+      return {
+        found: true,
+        text: delBtn.innerText || delBtn.getAttribute('aria-label') || 'delete experience',
+        x: Math.round(r.left + r.width / 2),
+        y: Math.round(r.top + r.height / 2)
+      };
+    })()`);
+
+    if (!deleteBtnInfo || !deleteBtnInfo.found) {
+      break;
+    }
+
+    deletedAny = true;
+
+    // Dispatch CDP mouse events as guarantee
+    if (deleteBtnInfo.x && deleteBtnInfo.y) {
+      ws.send(JSON.stringify({
+        id: Math.floor(Math.random() * 1000000),
+        method: 'Input.dispatchMouseEvent',
+        params: { type: 'mousePressed', x: deleteBtnInfo.x, y: deleteBtnInfo.y, button: 'left', clickCount: 1 }
+      }));
+      await new Promise(r => setTimeout(r, 40));
+      ws.send(JSON.stringify({
+        id: Math.floor(Math.random() * 1000000),
+        method: 'Input.dispatchMouseEvent',
+        params: { type: 'mouseReleased', x: deleteBtnInfo.x, y: deleteBtnInfo.y, button: 'left', clickCount: 1 }
+      }));
+    }
+
+    await new Promise(r => setTimeout(r, 350));
+
+    // Clear the confirmation popup ("Remove from your application?")
+    await handleRemoveConfirmationDialog(ws, cdpEval);
+    await new Promise(r => setTimeout(r, 300));
+  }
+
+  return deletedAny;
+}
+
 async function solveFormFields(ws, cdpEval, profile) {
   const serialized = JSON.stringify(profile || {});
   return await cdpEval(ws, `(() => {
@@ -199,9 +274,7 @@ async function solveFormFields(ws, cdpEval, profile) {
       el.dispatchEvent(new Event('change', { bubbles: true }));
     };
 
-    // A. Experience sub-card handling:
-    // Candidate's experience is already in their LinkedIn profile. We do not need to add new experience.
-    // If an unneeded experience sub-card was opened or encountered an error, click "Delete experience" and confirm.
+    // Experience sub-card handling
     const deleteExpBtn = Array.from(modal.querySelectorAll('button, a[role="button"]')).find(b => {
       const t = (b.innerText || b.getAttribute('aria-label') || '').toLowerCase().trim();
       return (t.includes('delete experience') || t === 'delete experience') && b.offsetWidth > 0;
@@ -210,25 +283,9 @@ async function solveFormFields(ws, cdpEval, profile) {
     if (deleteExpBtn) {
       deleteExpBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
       deleteExpBtn.click();
-      const clickRemoveConfirm = () => {
-        const dialogs = Array.from(document.querySelectorAll('dialog, [role="dialog"], .artdeco-modal'));
-        for (const d of dialogs) {
-          const txt = (d.innerText || '').toLowerCase();
-          if (txt.includes('remove from your application') || txt.includes('this will not affect your linkedin profile') || (txt.includes('remove') && txt.includes('cancel'))) {
-            const btns = Array.from(d.querySelectorAll('button, [role="button"]')).filter(b => b.offsetWidth > 0 || b.offsetHeight > 0);
-            const removeBtn = btns.find(b => (b.innerText || b.getAttribute('aria-label') || '').trim().toLowerCase() === 'remove');
-            if (removeBtn) { removeBtn.click(); return true; }
-          }
-        }
-        return false;
-      };
-      setTimeout(clickRemoveConfirm, 80);
-      setTimeout(clickRemoveConfirm, 250);
-      setTimeout(clickRemoveConfirm, 500);
-      return;
     }
 
-    // B. Standard Field Solver
+    // Standard Field Solver
     const elements = Array.from(modal.querySelectorAll('input:not([type="hidden"]), textarea, select'));
 
     elements.forEach(el => {
@@ -1108,6 +1165,7 @@ module.exports = {
   handleRemoveConfirmationDialog,
   handleProfilePrompt,
   handleSafetyReminder,
+  handleDeleteExperience,
   pruneEducation,
   solveFormFields,
   solveLocationTypeahead,
