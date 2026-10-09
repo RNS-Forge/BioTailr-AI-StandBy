@@ -306,6 +306,16 @@ async function solveFormFields(ws, cdpEval, profile) {
           el.dispatchEvent(new Event('focus', { bubbles: true }));
           el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'e' }));
           el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'e' }));
+
+          // If dropdown options are already visible, select the Coimbatore option immediately
+          const visibleOpts = Array.from(document.querySelectorAll('[role="option"], .basic-typeahead__selectable-list li, .search-basic-typeahead__results li, [role="listbox"] li, div[role="option"]')).filter(o => o.offsetWidth > 0 || o.offsetHeight > 0);
+          const matchOpt = visibleOpts.find(o => /coimbatore.*tamil\s*nadu/i.test(o.innerText || '')) || visibleOpts.find(o => /coimbatore/i.test(o.innerText || '')) || visibleOpts[0];
+          if (matchOpt) {
+            matchOpt.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+            matchOpt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+            matchOpt.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+            matchOpt.click();
+          }
         } else if (isNumericField) {
           // Strictly sanitize to digits only (e.g. "234as" -> "234")
           let val = '';
@@ -886,48 +896,121 @@ async function discardIncompleteModal(ws, cdpEval) {
 }
 
 async function solveLocationTypeahead(ws, cdpEval, targetCity = 'Coimbatore') {
-  const locInput = await cdpEval(ws, `(() => {
-    const modal = document.querySelector('dialog, [role="dialog"], .jobs-easy-apply-modal, .artdeco-modal');
-    if (!modal) return { found: false };
-    const ti = modal.querySelector('input[data-testid="typeahead-input"], input[placeholder*="city" i], input[placeholder*="location" i]');
-    if (!ti) return { found: false };
+  const delay = ms => new Promise(r => setTimeout(r, ms));
 
-    const current = (ti.value || '').trim();
-    // If already properly filled with Coimbatore, no need to retype
-    if (/coimbatore/i.test(current) && current.includes('Tamil Nadu')) {
-      return { found: true, alreadyFilled: true };
+  // Step 1: Check if the typeahead dropdown options are ALREADY visible on the page (like in the screenshot)
+  const openSelected = await cdpEval(ws, `(() => {
+    const optionSelectors = [
+      '[role="listbox"] [role="option"]',
+      '[role="listbox"] li',
+      '[role="listbox"] div',
+      'div[role="option"]',
+      'li[role="option"]',
+      '.basic-typeahead__selectable-list li',
+      '.search-basic-typeahead__results li',
+      '.search-basic-typeahead__result',
+      'ul[id*="typeahead"] li',
+      'div[id*="typeahead"] li',
+      '[class*="typeahead"] [role="option"]',
+      '[class*="typeahead"] li',
+      '[class*="typeahead"] div',
+      '.artdeco-typeahead__results li'
+    ];
+
+    const options = Array.from(document.querySelectorAll(optionSelectors.join(', '))).filter(o => {
+      return (o.offsetWidth > 0 || o.offsetHeight > 0) && (o.innerText || '').trim().length > 0;
+    });
+
+    if (options.length === 0) return { selected: false };
+
+    // Find best match: "Coimbatore, Tamil Nadu, India"
+    const target = options.find(o => /coimbatore.*tamil\s*nadu/i.test(o.innerText || ''))
+      || options.find(o => /coimbatore/i.test(o.innerText || ''))
+      || options[0];
+
+    if (target) {
+      target.scrollIntoView({ behavior: 'instant', block: 'nearest' });
+      target.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+      target.click();
+      return { selected: true, text: target.innerText.trim() };
     }
+    return { selected: false };
+  })()`);
+
+  if (openSelected && openSelected.selected) {
+    // Commit selection via Enter key
+    ws.send(JSON.stringify({
+      id: Math.floor(Math.random() * 1000000),
+      method: 'Input.dispatchKeyEvent',
+      params: { type: 'rawKeyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }
+    }));
+    await delay(50);
+    ws.send(JSON.stringify({
+      id: Math.floor(Math.random() * 1000000),
+      method: 'Input.dispatchKeyEvent',
+      params: { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }
+    }));
+    await delay(200);
+    return true;
+  }
+
+  // Step 2: Locate the location/city typeahead input
+  const locInput = await cdpEval(ws, `(() => {
+    const modal = document.querySelector('dialog, [role="dialog"], .jobs-easy-apply-modal, .artdeco-modal') || document.body;
+    const ti = modal.querySelector('input[data-testid="typeahead-input"]')
+      || modal.querySelector('input[role="combobox"]')
+      || modal.querySelector('input[placeholder*="city" i], input[placeholder*="location" i]')
+      || Array.from(modal.querySelectorAll('input[type="text"], input:not([type])')).find(i => {
+           const label = (i.closest('div, label, .fb-dash-form-element')?.innerText || '').toLowerCase();
+           return label.includes('city') || label.includes('location') || label.includes('where');
+         });
+
+    if (!ti) return { found: false };
 
     const r = ti.getBoundingClientRect();
     ti.focus();
     ti.select();
     return {
       found: true,
-      alreadyFilled: false,
       x: Math.round(r.left + r.width / 2),
       y: Math.round(r.top + r.height / 2),
-      currentVal: current
+      currentVal: (ti.value || '').trim()
     };
   })()`);
 
-  if (!locInput || !locInput.found || locInput.alreadyFilled) {
+  if (!locInput || !locInput.found) {
     return false;
   }
 
-  // Clear previous text (e.g. if name was typed previously)
+  // Step 3: Clear any existing text using Ctrl+A + Backspace
+  ws.send(JSON.stringify({
+    id: Math.floor(Math.random() * 1000000),
+    method: 'Input.dispatchKeyEvent',
+    params: { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 2 }
+  }));
+  await delay(50);
+  ws.send(JSON.stringify({
+    id: Math.floor(Math.random() * 1000000),
+    method: 'Input.dispatchKeyEvent',
+    params: { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 2 }
+  }));
+  await delay(50);
   ws.send(JSON.stringify({
     id: Math.floor(Math.random() * 1000000),
     method: 'Input.dispatchKeyEvent',
     params: { type: 'rawKeyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 }
   }));
+  await delay(50);
   ws.send(JSON.stringify({
     id: Math.floor(Math.random() * 1000000),
     method: 'Input.dispatchKeyEvent',
     params: { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 }
   }));
-  await new Promise(r => setTimeout(r, 80));
+  await delay(100);
 
-  // Type target city using CDP insertText to trigger LinkedIn search
+  // Step 4: Type target city via CDP Input.insertText to trigger live dropdown search
   ws.send(JSON.stringify({
     id: Math.floor(Math.random() * 1000000),
     method: 'Input.insertText',
@@ -935,19 +1018,30 @@ async function solveLocationTypeahead(ws, cdpEval, targetCity = 'Coimbatore') {
   }));
 
   // Wait 700ms for LinkedIn search results dropdown to populate
-  await new Promise(r => setTimeout(r, 700));
+  await delay(700);
 
-  // Select the Coimbatore, Tamil Nadu, India option
+  // Step 5: Click the matching option from the dropdown list
   const selected = await cdpEval(ws, `(() => {
-    const options = Array.from(document.querySelectorAll([
+    const optionSelectors = [
       '[role="listbox"] [role="option"]',
+      '[role="listbox"] li',
+      '[role="listbox"] div',
       'div[role="option"]',
+      'li[role="option"]',
       '.basic-typeahead__selectable-list li',
       '.search-basic-typeahead__results li',
+      '.search-basic-typeahead__result',
       'ul[id*="typeahead"] li',
       'div[id*="typeahead"] li',
-      '[role="listbox"] li'
-    ].join(', '))).filter(o => o.offsetWidth > 0 || o.offsetHeight > 0);
+      '[class*="typeahead"] [role="option"]',
+      '[class*="typeahead"] li',
+      '[class*="typeahead"] div',
+      '.artdeco-typeahead__results li'
+    ];
+
+    const options = Array.from(document.querySelectorAll(optionSelectors.join(', '))).filter(o => {
+      return (o.offsetWidth > 0 || o.offsetHeight > 0) && (o.innerText || '').trim().length > 0;
+    });
 
     if (options.length === 0) return { selected: false };
 
@@ -955,6 +1049,8 @@ async function solveLocationTypeahead(ws, cdpEval, targetCity = 'Coimbatore') {
     const targetOpt = coimbatoreFull || options.find(o => /coimbatore/i.test(o.innerText || '')) || options[0];
 
     if (targetOpt) {
+      targetOpt.scrollIntoView({ behavior: 'instant', block: 'nearest' });
+      targetOpt.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
       targetOpt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
       targetOpt.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
       targetOpt.click();
@@ -963,8 +1059,48 @@ async function solveLocationTypeahead(ws, cdpEval, targetCity = 'Coimbatore') {
     return { selected: false };
   })()`);
 
-  await new Promise(r => setTimeout(r, 300));
-  return Boolean(selected?.selected);
+  // Step 6: Also send ArrowDown + Enter key combination to guarantee selection
+  ws.send(JSON.stringify({
+    id: Math.floor(Math.random() * 1000000),
+    method: 'Input.dispatchKeyEvent',
+    params: { type: 'rawKeyDown', key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 }
+  }));
+  await delay(60);
+  ws.send(JSON.stringify({
+    id: Math.floor(Math.random() * 1000000),
+    method: 'Input.dispatchKeyEvent',
+    params: { type: 'keyUp', key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 }
+  }));
+  await delay(100);
+
+  ws.send(JSON.stringify({
+    id: Math.floor(Math.random() * 1000000),
+    method: 'Input.dispatchKeyEvent',
+    params: { type: 'rawKeyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }
+  }));
+  await delay(60);
+  ws.send(JSON.stringify({
+    id: Math.floor(Math.random() * 1000000),
+    method: 'Input.dispatchKeyEvent',
+    params: { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }
+  }));
+  await delay(150);
+
+  // Tab key to commit and move focus out
+  ws.send(JSON.stringify({
+    id: Math.floor(Math.random() * 1000000),
+    method: 'Input.dispatchKeyEvent',
+    params: { type: 'rawKeyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 }
+  }));
+  await delay(50);
+  ws.send(JSON.stringify({
+    id: Math.floor(Math.random() * 1000000),
+    method: 'Input.dispatchKeyEvent',
+    params: { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 }
+  }));
+  await delay(200);
+
+  return Boolean(selected?.selected || openSelected?.selected);
 }
 
 module.exports = {
