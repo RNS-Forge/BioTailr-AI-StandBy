@@ -13,8 +13,8 @@ http.get('http://127.0.0.1:9222/json', (res) => {
         const input = modal.querySelector('input[type="text"]');
         if (input) {
           const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement?.prototype || {}, 'value')?.set;
-          if (setter) setter.call(input, 'https://rns-forge.github.io/RNS_Professional_Profile/');
-          else input.value = 'https://rns-forge.github.io/RNS_Professional_Profile/';
+          if (setter) setter.call(input, 'https://candidate.portfolio.dev');
+          else input.value = 'https://candidate.portfolio.dev';
           input.dispatchEvent(new Event('input', { bubbles: true }));
           input.dispatchEvent(new Event('change', { bubbles: true }));
           input.dispatchEvent(new Event('blur', { bubbles: true }));

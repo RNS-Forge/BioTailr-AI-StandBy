@@ -11,7 +11,7 @@
  *     - Click orange "Apply" button -> popup modal opens.
  *  5. In the opened popup modal ("Reach out to X at Y"):
  *     - Click textarea input box area to focus.
- *     - Generate personalized, human-crafted message for Sanjay N.
+ *     - Generate personalized, human-crafted message for candidate.
  *     - Paste/insert message (satisfies 50-char minimum & React state).
  *     - Check location acknowledgement checkbox if present.
  *     - Click "Send" button.
@@ -213,9 +213,10 @@ class YCOrchestrator {
 
         log('MODAL', `Popup modal opened: "${modalStatus.headingText || 'Reach out'}"`);
 
-        // 6. Generate attractive, human-crafted message for Sanjay N
+        // 6. Generate attractive, human-crafted message for candidate
         const message = generateYCMessage({ title, company, description, techStack }, this.profile);
-        log('MESSAGE', `Generated message (${message.length} chars) from Sanjay N:\n"${message.substring(0, 100)}..."`);
+        const candName = this.profile?.personal?.fullName || 'Candidate';
+        log('MESSAGE', `Generated message (${message.length} chars) from ${candName}:\n"${message.substring(0, 100)}..."`);
 
         await updateHud(this.ws, {
           page: 1,

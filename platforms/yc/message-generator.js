@@ -1,12 +1,7 @@
 /**
  * BioTailr AI StandBy - YC Work at a Startup Message Generator
  * Generates compelling, highly professional outreach messages tailored to each job.
- * Authored by Sanjay N, featuring top projects with links from ATS Resume:
- * - BioTailr AI
- * - Agentium (PyPI) (12k+ developers)
- * - AgriBridge
- * - Furry Funds AI
- * - Contributor to Faculties.ai
+ * Fully dynamic based on candidate profile and portfolio projects.
  */
 
 function cleanTitle(rawTitle) {
@@ -59,40 +54,49 @@ function extractCompanyMission(description, companyName) {
 }
 
 /**
- * Generate a professional, high-impact outreach message for Sanjay N based on ATS Resume.
+ * Generate a professional, high-impact outreach message dynamically based on candidate profile.
  * @param {Object} jobInfo - { title, company, description, techStack }
  * @param {Object} profile - candidate profile from candidate-profile.json
  * @returns {string} Professional message with top projects, links, and contact info
  */
 function generateYCMessage(jobInfo, profile) {
-  const firstName = profile?.personal?.firstName || 'Sanjay';
-  const lastName = profile?.personal?.lastName || 'N';
-  const email = profile?.personal?.email || '2005sanjaynrs@gmail.com';
-  const phone = profile?.personal?.phone || '+91 9361599018';
-  const portfolio = profile?.personal?.portfolioUrl || 'https://rns-forge.github.io/RNS_Professional_Profile/';
-  const github = profile?.personal?.githubUrl || 'https://github.com/RNS-Forge';
-  const linkedin = profile?.personal?.linkedinUrl || 'https://www.linkedin.com/in/sanjay--n';
+  const firstName = profile?.personal?.firstName || profile?.personal?.fullName?.split(' ')[0] || 'Candidate';
+  const lastName = profile?.personal?.lastName || profile?.personal?.fullName?.split(' ').slice(1).join(' ') || '';
+  const fullName = profile?.personal?.fullName || [firstName, lastName].filter(Boolean).join(' ') || 'Candidate';
+  const email = profile?.personal?.email || '';
+  const phone = profile?.personal?.phone || '';
+  const portfolio = profile?.personal?.portfolioUrl || profile?.personal?.website || '';
+  const github = profile?.personal?.githubUrl || '';
+  const linkedin = profile?.personal?.linkedinUrl || '';
+  const currentTitle = profile?.experience?.currentTitle || 'Software Engineer';
 
   const t = cleanTitle(jobInfo.title);
   const c = cleanCompany(jobInfo.company, jobInfo.title);
   const hook = extractCompanyMission(jobInfo.description, c);
 
-  return `Hi! I'm ${firstName} ${lastName}, an AI & Software Engineer specializing in Agentic AI, RAG, and scalable enterprise systems.
+  let projectsSection = '';
+  if (Array.isArray(profile?.projects) && profile.projects.length > 0) {
+    const projLines = profile.projects.slice(0, 5).map(p => {
+      const name = p.name || p.title || 'Project';
+      const desc = p.description || p.summary || '';
+      const url = p.url || p.link || '';
+      return `• ${name}${url ? ` (${url})` : ''}: ${desc}`;
+    });
+    projectsSection = `\nKey Projects & Contributions:\n${projLines.join('\n')}\n`;
+  }
+
+  const links = [];
+  if (portfolio) links.push(`Portfolio: ${portfolio}`);
+  if (github) links.push(`GitHub: ${github}`);
+  if (linkedin) links.push(`LinkedIn: ${linkedin}`);
+  const contactLine = [email, phone].filter(Boolean).join(' | ');
+  if (contactLine) links.push(`Contact: ${contactLine}`);
+  const linksSection = links.length ? `\n${links.join('\n')}\n` : '';
+
+  return `Hi! I'm ${fullName}, a ${currentTitle}.
 
 I'm writing to express my strong interest in the ${t} role at ${c}. ${hook}
-
-Key Projects & Contributions:
-• BioTailr AI: Autonomous multi-agent job platform & desktop automation (rns-forge.github.io/BioTailr-AI)
-• Agentium (PyPI): Open-source Python library for agentic AI systems, enabling 12k+ developers to deploy intelligent agents (pypi.org/project/agentium)
-• Faculties.ai: Contributor & frontend developer for AI-driven academic workflow platform (faculties.ai)
-• AgriBridge: Global agri-trade platform connecting farmers, exporters, and importers
-• Furry Funds AI: AI-based risk screening & loan approval system (improved accuracy by 15%)
-
-Portfolio: ${portfolio}
-GitHub: ${github}
-LinkedIn: ${linkedin}
-Contact: ${email} | ${phone}
-
+${projectsSection}${linksSection}
 I would love to bring my technical drive and high startup velocity to ${c}. Looking forward to connecting!`;
 }
 

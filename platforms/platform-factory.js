@@ -7,6 +7,7 @@ const LinkedInPlatform = require('./linkedin');
 const IndeedPlatform = require('./indeed');
 const YCPlatform = require('./yc');
 const NaukriPlatform = require('./naukri');
+const FounditPlatform = require('./foundit');
 
 class PlatformFactory {
   static createPlatform(tabUrl, ws, cdpEval, profile, helpers = {}) {
@@ -18,6 +19,10 @@ class PlatformFactory {
 
     if (url.includes('naukri.com')) {
       return new NaukriPlatform(ws, cdpEval, profile, helpers);
+    }
+
+    if (url.includes('foundit') || url.includes('monsterindia')) {
+      return new FounditPlatform(ws, cdpEval, profile, helpers);
     }
 
     if (url.includes('linkedin.com')) {

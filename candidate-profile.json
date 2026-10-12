@@ -1,20 +1,20 @@
 {
   "personal": {
-    "firstName": "Sanjay",
-    "lastName": "N",
-    "fullName": "Sanjay N",
-    "email": "2005sanjaynrs@gmail.com",
-    "phone": "9361599018",
-    "city": "Coimbatore",
-    "state": "Tamil Nadu",
+    "firstName": "Candidate",
+    "lastName": "",
+    "fullName": "Candidate",
+    "email": "candidate@example.com",
+    "phone": "9876543210",
+    "city": "Bangalore",
+    "state": "Karnataka",
     "country": "India",
-    "postalCode": "641001",
-    "location": "Coimbatore, Tamil Nadu, India",
-    "fullLocation": "Coimbatore, Tamil Nadu, India",
-    "address": "Coimbatore, Tamil Nadu, India",
-    "linkedinUrl": "https://www.linkedin.com/in/sanjay--n",
-    "githubUrl": "https://github.com/RNS-Forge",
-    "portfolioUrl": "https://rns-forge.github.io/RNS_Professional_Profile/"
+    "postalCode": "560001",
+    "location": "Bangalore, Karnataka, India",
+    "fullLocation": "Bangalore, Karnataka, India",
+    "address": "Bangalore, Karnataka, India",
+    "linkedinUrl": "https://www.linkedin.com/in/candidate",
+    "githubUrl": "https://github.com/candidate",
+    "portfolioUrl": "https://candidate.portfolio.dev"
   },
   "workAuth": {
     "authorizedInCountry": "Yes",
@@ -22,20 +22,20 @@
     "currentVisaStatus": "Citizen"
   },
   "experience": {
-    "totalYears": 1,
+    "totalYears": 2,
     "noticePeriodDays": 15,
-    "currentTitle": "Full Stack & AI Engineer",
-    "currentCompany": "Axodian",
-    "currentSalary": "200000",
-    "expectedSalary": "450000",
-    "currentSalaryLpa": "2",
-    "expectedSalaryLpa": "4.5"
+    "currentTitle": "Software Development Engineer",
+    "currentCompany": "Technology Company",
+    "currentSalary": "600000",
+    "expectedSalary": "1000000",
+    "currentSalaryLpa": "6",
+    "expectedSalaryLpa": "10"
   },
   "education": {
     "degree": "Bachelor of Technology - BTech",
     "fieldOfStudy": "Computer Science and Engineering",
-    "institution": "Anna University / SNS College of Technology",
-    "gradYear": "2026"
+    "institution": "University / Institute of Technology",
+    "gradYear": "2024"
   },
   "settings": {
     "batchTarget": 0,

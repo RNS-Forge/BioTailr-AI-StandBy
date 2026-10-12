@@ -1,4 +1,46 @@
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
+
+let candidateContext = {};
+try {
+  const profilePath = path.resolve(__dirname, '../candidate-profile.json');
+  candidateContext = JSON.parse(fs.readFileSync(profilePath, 'utf8'));
+} catch (e) {
+  candidateContext = {
+    personal: {
+      firstName: 'Candidate',
+      lastName: '',
+      fullName: 'Candidate',
+      email: 'candidate@example.com',
+      phone: '9876543210',
+      city: 'Bangalore',
+      country: 'India',
+      linkedinUrl: 'https://www.linkedin.com/in/candidate',
+      githubUrl: 'https://github.com/candidate',
+      portfolioUrl: 'https://candidate.portfolio.dev'
+    },
+    workAuth: {
+      authorizedInCountry: 'Yes',
+      needSponsorship: 'No',
+      currentVisaStatus: 'Citizen'
+    },
+    experience: {
+      totalYears: 2,
+      noticePeriodDays: 15,
+      currentTitle: 'Software Development Engineer',
+      currentCompany: 'Technology Company',
+      expectedSalary: '1000000',
+      currentSalary: '600000'
+    },
+    education: {
+      degree: "Bachelor's Degree",
+      fieldOfStudy: 'Computer Science and Engineering',
+      institution: 'University / Institute of Technology',
+      gradYear: '2024'
+    }
+  };
+}
 
 http.get('http://127.0.0.1:9222/json', (res) => {
   let data = '';
@@ -8,7 +50,7 @@ http.get('http://127.0.0.1:9222/json', (res) => {
     const li = tabs.find(t => t.url && t.url.includes('linkedin.com/jobs'));
     const ws = new WebSocket(li.webSocketDebuggerUrl);
     ws.onopen = () => {
-      console.log('Running agent on active Beghou modal...');
+      console.log('Running agent on active modal...');
       // Execute the agent in page context
       const code = `(async () => {
         const modal = document.querySelector('dialog, [role="dialog"], .jobs-easy-apply-modal, .artdeco-modal');
@@ -20,39 +62,7 @@ http.get('http://127.0.0.1:9222/json', (res) => {
         const orchestrator = new window.AutoApplyOrchestrator();
         const linkedinPlatform = orchestrator.platforms.linkedin;
 
-        const candidateContext = {
-          personal: {
-            firstName: 'Sanjay',
-            lastName: 'N',
-            fullName: 'Sanjay N',
-            email: '2005sanjaynrs@gmail.com',
-            phone: '9361599018',
-            city: 'Coimbatore',
-            country: 'India',
-            linkedinUrl: 'https://www.linkedin.com/in/sanjay--n',
-            githubUrl: 'https://github.com/RNS-Forge',
-            portfolioUrl: 'https://rns-forge.github.io/RNS_Professional_Profile/'
-          },
-          workAuth: {
-            authorizedInCountry: 'Yes',
-            needSponsorship: 'No',
-            currentVisaStatus: 'Citizen'
-          },
-          experience: {
-            totalYears: 2,
-            noticePeriodDays: 15,
-            currentTitle: 'Software Development Engineer',
-            currentCompany: 'Axodian',
-            expectedSalary: '1200000',
-            currentSalary: '800000'
-          },
-          education: {
-            degree: "Bachelor's Degree",
-            fieldOfStudy: 'Computer Science and Engineering',
-            institution: 'Anna University / SNS College of Technology',
-            gradYear: '2026'
-          }
-        };
+        const candidateContext = ${JSON.stringify(candidateContext)};
 
         const result = await linkedinPlatform.executeFastApply(candidateContext, null, logger);
         return { result, logs };

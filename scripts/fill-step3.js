@@ -44,11 +44,11 @@ http.get('http://127.0.0.1:9222/json', (res) => {
               setVal(el, '1,200,000 INR (12 LPA)');
               logs.push({ idx, field: 'expected ctc', val: '1,200,000 INR' });
             } else if (labelText.includes('tinkering') || labelText.includes('software') || labelText.includes('experience')) {
-              const text = '2+ years of hands-on experience building full-stack software, agentic AI systems, LLM automation pipelines, and scalable backend microservices at Axodian. Deeply proficient in Python, FastAPI, React, modern Claude/OpenAI APIs, and autonomous agent workflows.';
+              const text = '2+ years of hands-on experience building full-stack software, agentic AI systems, LLM automation pipelines, and scalable backend microservices. Deeply proficient in Python, FastAPI, React, modern Claude/OpenAI APIs, and autonomous agent workflows.';
               setVal(el, text);
               logs.push({ idx, field: 'experience text', val: text.slice(0, 40) });
             } else if (!el.value) {
-              const gen = 'Sanjay N — Full Stack & Generative AI Engineer with 2+ years of experience architecting autonomous agent pipelines, microservices, and AI integrations at Axodian.';
+              const gen = 'Full Stack & Generative AI Engineer with 2+ years of experience architecting autonomous agent pipelines, microservices, and AI integrations.';
               setVal(el, gen);
               logs.push({ idx, field: 'fallback text', val: gen.slice(0, 40) });
             }

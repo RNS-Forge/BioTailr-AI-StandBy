@@ -49,7 +49,7 @@ async function check() {
         setVal(el, '2');
         filled.push({ label: 'Total Exp', val: el.value });
       } else if (label.includes('organisation') || label.includes('company')) {
-        setVal(el, 'Axodian');
+        setVal(el, 'Technology Company');
         filled.push({ label: 'Org', val: el.value });
       } else if (label.includes('designation') || label.includes('title')) {
         setVal(el, 'Full Stack & AI Engineer');

@@ -9,36 +9,36 @@ const { log, sleep, getTargetTab, connectWebSocket, cdpEval } = require('./core/
 const PlatformFactory = require('./platforms/platform-factory');
 const Orchestrator = require('./core/orchestrator');
 
-// Load Candidate Profile Configuration
+// Default Dynamic Candidate Profile Configuration
 let profile = {
   personal: {
-    fullName: 'Sanjay N',
-    firstName: 'Sanjay',
-    lastName: 'N',
-    email: '2005sanjaynrs@gmail.com',
-    phone: '+91 9361599018',
-    city: 'Coimbatore, Tamil Nadu, India',
-    linkedinUrl: 'https://www.linkedin.com/in/sanjay--n',
-    githubUrl: 'https://github.com/RNS-Forge',
-    portfolioUrl: 'https://rns-forge.github.io/RNS_Professional_Profile/'
+    fullName: 'Candidate',
+    firstName: 'Candidate',
+    lastName: '',
+    email: '',
+    phone: '',
+    city: '',
+    linkedinUrl: '',
+    githubUrl: '',
+    portfolioUrl: ''
   },
   workAuth: {
     authorizedInCountry: 'Yes',
     needSponsorship: 'No'
   },
   experience: {
-    totalYears: 1,
+    totalYears: 2,
     noticePeriodDays: 15,
-    currentTitle: 'Full Stack & AI Engineer',
-    currentCompany: 'Axodian',
-    currentSalary: '200000',
-    expectedSalary: '450000',
-    currentSalaryLpa: '2',
-    expectedSalaryLpa: '4.5'
+    currentTitle: 'Software Development Engineer',
+    currentCompany: '',
+    currentSalary: '600000',
+    expectedSalary: '1000000',
+    currentSalaryLpa: '6',
+    expectedSalaryLpa: '10'
   },
   education: {
     degree: 'Bachelor of Technology - BTech',
-    institution: 'Anna University / SNS College of Technology'
+    institution: 'University / Institute of Technology'
   },
   settings: {
     batchTarget: 0, // 0 = unlimited continuous apply

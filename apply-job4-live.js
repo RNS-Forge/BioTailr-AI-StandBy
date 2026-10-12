@@ -192,7 +192,7 @@ async function applyJob4() {
           } else if (labelText.includes('income expectation')) {
             setVal(el, '1,200,000 INR (12 LPA)');
           } else if (labelText.includes('organisation') || labelText.includes('organization') || labelText.includes('company')) {
-            setVal(el, 'Axodian');
+            setVal(el, 'Technology Company');
           } else if (labelText.includes('designation') || labelText.includes('title')) {
             setVal(el, 'Full Stack & AI Engineer');
           } else if (labelText.includes('notice')) {
@@ -202,17 +202,17 @@ async function applyJob4() {
           } else if (labelText.includes('expected ctc') || labelText.includes('expected salary')) {
             setVal(el, '1,200,000 INR (12 LPA)');
           } else if (labelText.includes('city') || labelText.includes('location') || labelText.includes('where')) {
-            setVal(el, 'Coimbatore, Tamil Nadu, India');
+            setVal(el, 'Bangalore, Karnataka, India');
           } else if (labelText.includes('linkedin')) {
-            setVal(el, 'https://www.linkedin.com/in/sanjay--n');
+            setVal(el, 'https://www.linkedin.com/in/candidate');
           } else if (labelText.includes('github')) {
-            setVal(el, 'https://github.com/RNS-Forge');
+            setVal(el, 'https://github.com/candidate');
           } else if (labelText.includes('portfolio') || labelText.includes('website') || labelText.includes('other')) {
-            setVal(el, 'https://rns-forge.github.io/RNS_Professional_Profile/');
+            setVal(el, 'https://candidate.portfolio.dev');
           } else if (labelText.includes('summary') || labelText.includes('cover letter') || labelText.includes('about')) {
-            setVal(el, '2+ years of hands-on experience developing scalable full-stack software, agentic AI pipelines, microservices, and modern web architectures at Axodian. Deeply proficient in Python, FastAPI, React, SQL, and LLM APIs.');
+            setVal(el, '2+ years of hands-on experience developing scalable full-stack software, agentic AI pipelines, microservices, and modern web architectures. Deeply proficient in Python, FastAPI, React, SQL, and LLM APIs.');
           } else if (!el.value) {
-            setVal(el, el.tagName === 'TEXTAREA' ? 'Experienced in AI engineering, Python, React, and scalable backend services.' : 'Sanjay N');
+            setVal(el, el.tagName === 'TEXTAREA' ? 'Experienced in AI engineering, Python, React, and scalable backend services.' : 'Candidate');
           }
         } else if (el.tagName === 'SELECT') {
           const opts = Array.from(el.options);

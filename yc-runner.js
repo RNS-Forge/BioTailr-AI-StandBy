@@ -24,15 +24,15 @@ const YCOrchestrator = require('./core/yc-orchestrator');
 // Load candidate profile
 let profile = {
   personal: {
-    fullName: 'Sanjay N',
-    firstName: 'Sanjay',
-    lastName: 'N',
-    email: '2005sanjaynrs@gmail.com',
-    phone: '+91 9361599018',
-    city: 'Coimbatore, Tamil Nadu, India',
-    linkedinUrl: 'https://www.linkedin.com/in/sanjay--n',
-    githubUrl: 'https://github.com/RNS-Forge',
-    portfolioUrl: 'https://rns-forge.github.io/RNS_Professional_Profile/'
+    fullName: '',
+    firstName: '',
+    lastName: '',
+    email: '',
+    phone: '',
+    city: '',
+    linkedinUrl: '',
+    githubUrl: '',
+    portfolioUrl: ''
   },
   workAuth: {
     authorizedInCountry: 'Yes',
@@ -41,18 +41,18 @@ let profile = {
   experience: {
     totalYears: 1,
     noticePeriodDays: 15,
-    currentTitle: 'Full Stack & AI Engineer',
-    currentCompany: 'Axodian',
-    currentSalary: '200000',
-    expectedSalary: '450000',
-    currentSalaryLpa: '2',
-    expectedSalaryLpa: '4.5'
+    currentTitle: '',
+    currentCompany: '',
+    currentSalary: '',
+    expectedSalary: '',
+    currentSalaryLpa: '',
+    expectedSalaryLpa: ''
   },
   education: {
-    degree: 'Bachelor of Technology - BTech',
-    fieldOfStudy: 'Computer Science and Engineering',
-    institution: 'Anna University / SNS College of Technology',
-    gradYear: '2026'
+    degree: '',
+    fieldOfStudy: '',
+    institution: '',
+    gradYear: ''
   },
   settings: {
     batchTarget: 0, // 0 = unlimited

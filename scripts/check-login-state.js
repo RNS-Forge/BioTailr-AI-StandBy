@@ -10,7 +10,7 @@ http.get('http://127.0.0.1:9222/json', (res) => {
     ws.onopen = () => {
       const code = `(() => {
         const bodyText = document.body.innerText.slice(0, 500);
-        const navProfile = document.querySelector('.global-nav__me, img[alt*="Sanjay"], button[aria-label*="Me"]');
+        const navProfile = document.querySelector('.global-nav__me, img[alt*="profile" i], img[class*="nav__me" i], button[aria-label*="Me"]');
         const signInBtn = Array.from(document.querySelectorAll('a, button')).find(b => b.innerText.trim().toLowerCase() === 'sign in');
         return {
           bodyText,

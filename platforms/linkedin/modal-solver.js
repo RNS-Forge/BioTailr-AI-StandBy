@@ -166,7 +166,7 @@ async function pruneEducation(ws, cdpEval) {
         const card = b.closest('li, div[class*="group"]') || b.parentElement?.parentElement;
         const txt = (card ? card.innerText : '').toLowerCase();
         const isSchool = /school|metric|secondary|12th|10th/i.test(txt);
-        const isCollege = !isSchool && (/college|university|btech|degree|anna|sns/i.test(txt));
+        const isCollege = !isSchool && (/college|university|btech|degree|bachelor|master|institute/i.test(txt));
         if (isCollege && !keptCollege) { keptCollege = true; return; }
         if (isSchool && !keptSchool) { keptSchool = true; return; }
         b.click();
@@ -356,17 +356,23 @@ async function solveFormFields(ws, cdpEval, profile) {
         const isCityOrLocation = isTypeaheadLocation || isCombobox || labelText.includes('city') || labelText.includes('location') || labelText.includes('residence') || labelText.includes('where') || labelText.includes('address');
 
         if (isCityOrLocation) {
-          const fullLocationStr = 'Coimbatore, Tamil Nadu, India';
+          const fullLocationStr = prof.personal?.fullLocation || prof.personal?.location || prof.personal?.city || '';
           const isFullLocReq = !isCombobox && (labelText.includes('location') || labelText.includes('where') || labelText.includes('address'));
-          const fillVal = isFullLocReq ? fullLocationStr : (prof.personal?.city || 'Coimbatore');
-          setVal(el, fillVal);
-          el.dispatchEvent(new Event('focus', { bubbles: true }));
-          el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'e' }));
-          el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'e' }));
+          const fillVal = isFullLocReq ? fullLocationStr : (prof.personal?.city || prof.personal?.location || '');
+          if (fillVal) {
+            setVal(el, fillVal);
+            el.dispatchEvent(new Event('focus', { bubbles: true }));
+            el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'e' }));
+            el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'e' }));
+          }
 
-          // If dropdown options are already visible, select the Coimbatore option immediately
+          // If dropdown options are already visible, select matching city option immediately
           const visibleOpts = Array.from(document.querySelectorAll('[role="option"], .basic-typeahead__selectable-list li, .search-basic-typeahead__results li, [role="listbox"] li, div[role="option"]')).filter(o => o.offsetWidth > 0 || o.offsetHeight > 0);
-          const matchOpt = visibleOpts.find(o => /coimbatore.*tamil\s*nadu/i.test(o.innerText || '')) || visibleOpts.find(o => /coimbatore/i.test(o.innerText || '')) || visibleOpts[0];
+          const targetCityName = (prof.personal?.city || '').toLowerCase();
+          const matchOpt = visibleOpts.find(o => {
+            const ot = (o.innerText || '').toLowerCase();
+            return targetCityName ? ot.includes(targetCityName) : false;
+          }) || visibleOpts[0];
           if (matchOpt) {
             matchOpt.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
             matchOpt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
@@ -385,73 +391,81 @@ async function solveFormFields(ws, cdpEval, profile) {
             const isLpa = /lpa|lakh/i.test(labelText) || (el.maxLength > 0 && el.maxLength <= 4);
             val = isLpa ? String(prof.experience?.expectedSalaryLpa || '4.5') : String(prof.experience?.expectedSalary || '450000');
           } else if (labelText.includes('phone') || labelText.includes('mobile')) {
-            val = String(prof.personal?.phone || '9361599018').replace(/\D/g, '');
+            val = String(prof.personal?.phone || '').replace(/\D/g, '');
           } else if (labelText.includes('postal') || labelText.includes('zip') || labelText.includes('pin')) {
-            val = '641001';
+            val = String(prof.personal?.postalCode || '641001');
           } else if (labelText.includes('gpa') || labelText.includes('cgpa')) {
             val = '8';
           } else if (labelText.includes('percentage') || labelText.includes('percent')) {
             val = '85';
           } else {
-            val = String(prof.experience?.totalYears || '1');
+            val = String(prof.experience?.totalYears || '2');
           }
           const sanitizedDigits = val.replace(/\D/g, '') || '1';
           setVal(el, sanitizedDigits);
         } else {
           // Clean text input (strictly guard so location/city inputs are NEVER set with candidate name!)
           if (isCityOrLocation || isTypeaheadLocation || el.getAttribute('data-testid') === 'typeahead-input' || /city|location/i.test(el.placeholder || '')) {
-            setVal(el, 'Coimbatore, Tamil Nadu, India');
+            const locVal = prof.personal?.location || prof.personal?.city || '';
+            if (locVal) setVal(el, locVal);
           } else if (labelText.includes('first name') || labelText.includes('given name')) {
-            setVal(el, prof.personal?.firstName || 'Sanjay');
+            setVal(el, prof.personal?.firstName || 'Applicant');
           } else if (labelText.includes('last name') || labelText.includes('family name') || labelText.includes('surname')) {
-            setVal(el, prof.personal?.lastName || 'N');
+            setVal(el, prof.personal?.lastName || '');
           } else if (labelText.includes('full name')) {
-            setVal(el, prof.personal?.fullName || 'Sanjay N');
+            setVal(el, prof.personal?.fullName || 'Applicant');
           } else if (labelText.includes('email')) {
-            setVal(el, prof.personal?.email || '2005sanjaynrs@gmail.com');
+            setVal(el, prof.personal?.email || '');
           } else if (labelText.includes('organisation') || labelText.includes('organization') || labelText.includes('company')) {
-            setVal(el, prof.experience?.currentCompany || 'Axodian');
+            setVal(el, prof.experience?.currentCompany || '');
           } else if (labelText.includes('designation') || labelText.includes('title') || labelText.includes('role')) {
-            setVal(el, prof.experience?.currentTitle || 'Full Stack & AI Engineer');
+            setVal(el, prof.experience?.currentTitle || 'Software Engineer');
           } else if (labelText.includes('linkedin')) {
-            setVal(el, prof.personal?.linkedinUrl || 'https://www.linkedin.com/in/sanjay--n');
+            setVal(el, prof.personal?.linkedinUrl || '');
           } else if (labelText.includes('github')) {
-            setVal(el, prof.personal?.githubUrl || 'https://github.com/RNS-Forge');
+            setVal(el, prof.personal?.githubUrl || '');
           } else if (labelText.includes('portfolio') || labelText.includes('website') || labelText.includes('other')) {
-            setVal(el, prof.personal?.portfolioUrl || 'https://rns-forge.github.io/RNS_Professional_Profile/');
+            setVal(el, prof.personal?.portfolioUrl || '');
           } else if (labelText.includes('college') || labelText.includes('university') || labelText.includes('institution') || labelText.includes('school')) {
-            setVal(el, prof.education?.institution || 'Anna University / SNS College of Technology');
+            setVal(el, prof.education?.institution || '');
           } else if (labelText.includes('degree') || labelText.includes('qualification')) {
-            setVal(el, prof.education?.degree || 'Bachelor of Technology - BTech');
+            setVal(el, prof.education?.degree || 'Bachelor of Engineering / Technology');
           } else if (labelText.includes('major') || labelText.includes('field of study')) {
             setVal(el, prof.education?.fieldOfStudy || 'Computer Science and Engineering');
           } else if (labelText.includes('country')) {
-            setVal(el, 'India');
+            setVal(el, prof.personal?.country || 'India');
           } else if (labelText.includes('state')) {
-            setVal(el, 'Tamil Nadu');
+            setVal(el, prof.personal?.state || '');
           } else if (labelText.includes('skill') || labelText.includes('tools') || labelText.includes('tech stack')) {
-            setVal(el, 'Python, FastAPI, React, Node.js, SQL, PostgreSQL, LLMs, Docker, Git');
+            const skillStr = (Array.isArray(prof.skills) && prof.skills.length > 0) ? prof.skills.slice(0, 10).join(', ') : 'Software Engineering, Python, React, SQL, Git';
+            setVal(el, skillStr);
           } else {
-            // Avoid gibberish like 234as in text inputs
             if (!el.value || /\d{2,}[a-z]+|[a-z]+\d{2,}/i.test(el.value)) {
-              setVal(el, 'Full Stack & AI Engineer');
+              setVal(el, prof.experience?.currentTitle || 'Software Engineer');
             }
           }
         }
       } else if (isTextarea) {
-        // Open-ended questions & Cover letters answered as Sanjay N
+        const candName = prof.personal?.fullName || 'Applicant';
+        const candEmail = prof.personal?.email || '';
+        const candPhone = prof.personal?.phone ? String(prof.personal.phone) : '';
+        const candTitle = prof.experience?.currentTitle || 'Software Engineer';
+        const candYears = prof.experience?.totalYears || '2';
+        const candCompany = prof.experience?.currentCompany ? `at ${prof.experience.currentCompany}` : '';
+        const contactSig = [candName, candEmail, candPhone].filter(Boolean).join(' | ');
+
         if (/cover\s*letter|message|note\s*to|letter/i.test(labelText)) {
-          setVal(el, 'Dear Hiring Team,\\n\\nI am writing to express my strong enthusiasm for this role. With 1 year of hands-on experience as a Full Stack & AI Engineer at Axodian, I build agentic AI pipelines, LLM-powered systems, scalable backends using Python and FastAPI, and responsive React web applications. I take ownership of architecting reliable production solutions that solve real problems. I would love the opportunity to contribute my skills to your team.\\n\\nBest regards,\\nSanjay N\\n2005sanjaynrs@gmail.com | +91 9361599018');
+          setVal(el, `Dear Hiring Team,\\n\\nI am writing to express my strong enthusiasm for this position. With ${candYears} years of hands-on experience as a ${candTitle} ${candCompany}, I focus on architecting resilient, production-ready solutions that solve complex technical problems and drive measurable outcomes.\\n\\nSincerely,\\n${contactSig}`);
         } else if (/why.*(hire|work|join|fit|company|us)|interest/i.test(labelText)) {
-          setVal(el, 'As a Full Stack & AI Engineer with 1 year of experience at Axodian, I bring proven expertise in Python, React, and LLM integrations. I am excited to apply my problem-solving ability, rapid learning mindset, and technical background to create high-impact products with your engineering team.');
+          setVal(el, `As a ${candTitle} with ${candYears} years of experience ${candCompany}, I bring proven technical problem-solving ability, rapid learning velocity, and production expertise. I am excited to contribute to your engineering objectives.`);
         } else if (/project|achievement|accomplish|describe.*experience/i.test(labelText)) {
-          setVal(el, 'At Axodian, I have developed production AI agent workflows and full-stack web platforms using Python, FastAPI, React, and SQL. I focus on building resilient inference pipelines, robust API integrations, and low-latency database queries.');
+          setVal(el, `In my work as a ${candTitle} ${candCompany}, I have engineered scalable features, optimized database queries, and collaborated with cross-functional teams to deliver reliable software with high availability.`);
         } else if (/relocat|remote|hybrid|travel|commute/i.test(labelText)) {
           setVal(el, 'Yes, I am fully open to remote, hybrid, or on-site arrangements and comfortable with relocation.');
         } else if (/summary|about\s*(yourself|you)|bio/i.test(labelText)) {
-          setVal(el, 'Full Stack & AI Engineer with 1 year of experience building production AI workflows, full-stack web applications, and backend services. Proficient in Python, FastAPI, React, SQL, LLM toolchains, and cloud deployments.');
+          setVal(el, prof.summary || `${candTitle} with ${candYears} years of experience developing scalable applications and high-performance software.`);
         } else if (!el.value || /\d{2,}[a-z]+|[a-z]+\d{2,}/i.test(el.value)) {
-          setVal(el, 'Full Stack & AI Engineer with 1 year of experience developing scalable applications in Python, React, and generative AI.');
+          setVal(el, `${candTitle} with ${candYears} years of experience developing scalable solutions.`);
         }
       } else if (isSelect) {
         const opts = Array.from(el.options);
@@ -462,7 +476,7 @@ async function solveFormFields(ws, cdpEval, profile) {
           matchIdx = opts.findIndex(o => /january|jan|^1$/i.test(o.text.trim()));
           if (matchIdx === -1 && opts.length > 1) matchIdx = 1;
         } else if (/year/i.test(labelText)) {
-          matchIdx = opts.findIndex(o => /2022|2021|2023|2026/i.test(o.text));
+          matchIdx = opts.findIndex(o => /2022|2021|2023|2024|2025|2026/i.test(o.text));
           if (matchIdx === -1 && opts.length > 1) matchIdx = 1;
         } else if (/proficiency|skill\s*level|knowledge/i.test(labelText)) {
           matchIdx = opts.findIndex(o => /expert|advanced|intermediate|proficient/i.test(o.text.trim()));
@@ -497,7 +511,7 @@ async function solveFormFields(ws, cdpEval, profile) {
       }
     });
 
-    // C. Select Typeahead Dropdown Option (Prefers Coimbatore)
+    // C. Select Typeahead Dropdown Option dynamically based on candidate's city
     const openOptions = Array.from(document.querySelectorAll([
       '[role="listbox"] [role="option"]',
       'div[role="option"]',
@@ -510,10 +524,14 @@ async function solveFormFields(ws, cdpEval, profile) {
     ].join(', '))).filter(o => o.offsetWidth > 0 || o.offsetHeight > 0);
 
     if (openOptions.length > 0) {
-      const coimbatoreOpt = openOptions.find(o => /coimbatore/i.test(o.innerText || '')) || openOptions[0];
-      coimbatoreOpt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-      coimbatoreOpt.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-      coimbatoreOpt.click();
+      const targetCity = (prof.personal?.city || '').toLowerCase();
+      const cityOpt = openOptions.find(o => {
+        const txt = (o.innerText || '').toLowerCase();
+        return targetCity ? txt.includes(targetCity) : false;
+      }) || openOptions[0];
+      cityOpt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      cityOpt.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+      cityOpt.click();
     }
 
     // D. Validation Error Auto-Correction Pass
@@ -555,17 +573,17 @@ async function solveFormFields(ws, cdpEval, profile) {
         if (/salary|ctc/i.test(labelText)) {
           if (labelText.includes('expected')) {
             const isLpa = /lpa|lakh/i.test(labelText) || (el.maxLength > 0 && el.maxLength <= 4);
-            digits = isLpa ? '4' : '450000';
+            digits = isLpa ? String(prof.experience?.expectedSalaryLpa || '4.5') : String(prof.experience?.expectedSalary || '450000');
           } else {
             const isLpa = /lpa|lakh/i.test(labelText) || (el.maxLength > 0 && el.maxLength <= 4);
-            digits = isLpa ? '2' : '200000';
+            digits = isLpa ? String(prof.experience?.currentSalaryLpa || '2') : String(prof.experience?.currentSalary || '200000');
           }
         } else if (/notice/i.test(labelText)) {
-          digits = '15';
+          digits = String(prof.experience?.noticePeriodDays || '15');
         } else if (/experience|year/i.test(labelText)) {
-          digits = '1';
+          digits = String(prof.experience?.totalYears || '2');
         } else if (/phone|mobile/i.test(labelText)) {
-          digits = '9361599018';
+          digits = String(prof.personal?.phone || '').replace(/\D/g, '');
         } else if (!digits) {
           digits = '1';
         }
@@ -573,11 +591,14 @@ async function solveFormFields(ws, cdpEval, profile) {
       } else {
         // Text field error: replace any invalid alphanumeric strings with valid label answers
         if (/city|location|where|residence/i.test(labelText) || el.getAttribute('data-testid') === 'typeahead-input' || /city|location/i.test(el.placeholder || '')) {
-          setVal(el, 'Coimbatore, Tamil Nadu, India');
+          const loc = prof.personal?.location || prof.personal?.city || '';
+          if (loc) setVal(el, loc);
         } else if (el.tagName === 'TEXTAREA') {
-          setVal(el, 'Full Stack & AI Engineer with 1 year of experience developing scalable applications in Python, React, and generative AI.');
+          const candTitle = prof.experience?.currentTitle || 'Software Engineer';
+          const candYears = prof.experience?.totalYears || '2';
+          setVal(el, `${candTitle} with ${candYears} years of experience developing scalable solutions.`);
         } else {
-          setVal(el, 'Full Stack & AI Engineer');
+          setVal(el, prof.experience?.currentTitle || 'Software Engineer');
         }
       }
       el.dispatchEvent(new Event('blur', { bubbles: true }));
@@ -952,11 +973,13 @@ async function discardIncompleteModal(ws, cdpEval) {
   return false;
 }
 
-async function solveLocationTypeahead(ws, cdpEval, targetCity = 'Coimbatore') {
+async function solveLocationTypeahead(ws, cdpEval, targetCity = '') {
   const delay = ms => new Promise(r => setTimeout(r, ms));
+  const cityQuery = targetCity ? targetCity.replace(/[^a-zA-Z0-9\s]/g, '').trim() : '';
 
-  // Step 1: Check if the typeahead dropdown options are ALREADY visible on the page (like in the screenshot)
+  // Step 1: Check if the typeahead dropdown options are ALREADY visible on the page
   const openSelected = await cdpEval(ws, `(() => {
+    const cityStr = ${JSON.stringify(cityQuery.toLowerCase())};
     const optionSelectors = [
       '[role="listbox"] [role="option"]',
       '[role="listbox"] li',
@@ -980,9 +1003,7 @@ async function solveLocationTypeahead(ws, cdpEval, targetCity = 'Coimbatore') {
 
     if (options.length === 0) return { selected: false };
 
-    // Find best match: "Coimbatore, Tamil Nadu, India"
-    const target = options.find(o => /coimbatore.*tamil\s*nadu/i.test(o.innerText || ''))
-      || options.find(o => /coimbatore/i.test(o.innerText || ''))
+    const target = options.find(o => cityStr ? (o.innerText || '').toLowerCase().includes(cityStr) : false)
       || options[0];
 
     if (target) {
@@ -1068,17 +1089,20 @@ async function solveLocationTypeahead(ws, cdpEval, targetCity = 'Coimbatore') {
   await delay(100);
 
   // Step 4: Type target city via CDP Input.insertText to trigger live dropdown search
-  ws.send(JSON.stringify({
-    id: Math.floor(Math.random() * 1000000),
-    method: 'Input.insertText',
-    params: { text: targetCity }
-  }));
+  if (cityQuery) {
+    ws.send(JSON.stringify({
+      id: Math.floor(Math.random() * 1000000),
+      method: 'Input.insertText',
+      params: { text: cityQuery }
+    }));
+  }
 
   // Wait 700ms for LinkedIn search results dropdown to populate
   await delay(700);
 
   // Step 5: Click the matching option from the dropdown list
   const selected = await cdpEval(ws, `(() => {
+    const cityStr = ${JSON.stringify(cityQuery.toLowerCase())};
     const optionSelectors = [
       '[role="listbox"] [role="option"]',
       '[role="listbox"] li',
@@ -1102,8 +1126,8 @@ async function solveLocationTypeahead(ws, cdpEval, targetCity = 'Coimbatore') {
 
     if (options.length === 0) return { selected: false };
 
-    const coimbatoreFull = options.find(o => /coimbatore.*tamil\s*nadu/i.test(o.innerText || ''));
-    const targetOpt = coimbatoreFull || options.find(o => /coimbatore/i.test(o.innerText || '')) || options[0];
+    const targetOpt = options.find(o => cityStr ? (o.innerText || '').toLowerCase().includes(cityStr) : false)
+      || options[0];
 
     if (targetOpt) {
       targetOpt.scrollIntoView({ behavior: 'instant', block: 'nearest' });

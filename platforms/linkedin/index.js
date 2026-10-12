@@ -136,8 +136,8 @@ class LinkedInPlatform extends BasePlatform {
     // 4b. Re-check if any delete experience was revealed
     await handleDeleteExperience(this.ws, this.cdpEval);
 
-    // 5. Ensure location typeahead dropdown is solved with Coimbatore, Tamil Nadu, India
-    await solveLocationTypeahead(this.ws, this.cdpEval);
+    // 5. Ensure location typeahead dropdown is solved with candidate target location
+    await solveLocationTypeahead(this.ws, this.cdpEval, this.profile?.personal?.city || this.profile?.personal?.location || '');
 
     // 6. Check if delete experience triggered confirmation dialog and clear it
     await handleRemoveConfirmationDialog(this.ws, this.cdpEval);
@@ -148,7 +148,7 @@ class LinkedInPlatform extends BasePlatform {
   }
 
   async solveLocationTypeahead() {
-    return await solveLocationTypeahead(this.ws, this.cdpEval);
+    return await solveLocationTypeahead(this.ws, this.cdpEval, this.profile?.personal?.city || this.profile?.personal?.location || '');
   }
 
   async handleDeleteExperience() {

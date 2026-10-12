@@ -47,28 +47,30 @@ async function getNaukriModalStatus(ws, cdpEval) {
  */
 async function solveNaukriModal(ws, cdpEval, profile) {
   // Extract all profile values outside the template literal to avoid backtick conflicts
-  const noticeDays   = String(profile.experience && profile.experience.noticePeriodDays || 15);
-  const curSalaryLpa = String(profile.experience && profile.experience.currentSalaryLpa  || '2');
-  const curSalary    = String(profile.experience && profile.experience.currentSalary     || '200000');
-  const expSalaryLpa = String(profile.experience && profile.experience.expectedSalaryLpa || '4.5');
-  const expSalary    = String(profile.experience && profile.experience.expectedSalary    || '450000');
-  const totalYears   = String(profile.experience && profile.experience.totalYears        || 1);
-  const city         = String(profile.personal && profile.personal.city || 'Coimbatore').replace(/'/g, "\\'");
-  const phone        = String(profile.personal && profile.personal.phone || '9361599018').replace(/\D/g, '').slice(-10);
-  const email        = String(profile.personal && profile.personal.email || '2005sanjaynrs@gmail.com').replace(/'/g, "\\'");
-  const fullName     = String(profile.personal && profile.personal.fullName || 'Sanjay N').replace(/'/g, "\\'");
-  const pitch = [
-    'Hi, I am Sanjay N, Full Stack & AI Engineer with production LLM agent pipelines & generative AI experience at Axodian.',
-    '',
-    'Key Projects:',
-    '- BioTailr AI (Real-time ATS Resume Platform): https://rns-forge.github.io/BioTailr-AI/',
-    '- Agentium (AI Agent Framework): https://pypi.org/project/agentium',
-    '- Contributor at Faculties.ai',
-    '- AgriBridge & Furry Funds AI',
-    '',
-    'Notice Period: 15 Days | Current CTC: 2 LPA | Expected CTC: 4.5 LPA | Location: Coimbatore, Tamil Nadu',
-    'Portfolio: https://rns-forge.github.io/RNS_Professional_Profile/'
-  ].join('\\n').replace(/'/g, "\\'");
+  const noticeDays   = String(profile.experience?.noticePeriodDays || 15);
+  const curSalaryLpa = String(profile.experience?.currentSalaryLpa || '');
+  const curSalary    = String(profile.experience?.currentSalary || '');
+  const expSalaryLpa = String(profile.experience?.expectedSalaryLpa || '');
+  const expSalary    = String(profile.experience?.expectedSalary || '');
+  const totalYears   = String(profile.experience?.totalYears || 1);
+  const city         = String(profile.personal?.city || profile.personal?.location || '').replace(/'/g, "\\'");
+  const phone        = String(profile.personal?.phone || '').replace(/\D/g, '').slice(-10);
+  const email        = String(profile.personal?.email || '').replace(/'/g, "\\'");
+  const fullName     = String(profile.personal?.fullName || 'Candidate').replace(/'/g, "\\'");
+  const currentTitle = String(profile.experience?.currentTitle || 'Software Engineer').replace(/'/g, "\\'");
+  const currentCompany = String(profile.experience?.currentCompany || '').replace(/'/g, "\\'");
+  const portfolio    = String(profile.personal?.portfolioUrl || profile.personal?.website || '').replace(/'/g, "\\'");
+
+  const pitchLines = [
+    `Hi, I am ${fullName}, ${currentTitle}${currentCompany ? ' at ' + currentCompany : ''}.`
+  ];
+  if (Array.isArray(profile.skills) && profile.skills.length) {
+    pitchLines.push(`Key Skills: ${profile.skills.slice(0, 8).join(', ')}`);
+  }
+  if (portfolio) {
+    pitchLines.push(`Portfolio: ${portfolio}`);
+  }
+  const pitch = pitchLines.join('\\n').replace(/'/g, "\\'");
 
   const expression = `(() => {
     const NOTICE_DAYS = '${noticeDays}';

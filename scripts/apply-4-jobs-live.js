@@ -215,17 +215,17 @@ async function run4JobsApply() {
             } else if (labelText.includes('expected ctc') || labelText.includes('expected salary')) {
               setVal(el, '1,200,000 INR (12 LPA)');
             } else if (labelText.includes('city') || labelText.includes('location') || labelText.includes('where')) {
-              setVal(el, 'Coimbatore, Tamil Nadu, India');
+              setVal(el, 'Bangalore, Karnataka, India');
             } else if (labelText.includes('linkedin')) {
-              setVal(el, 'https://www.linkedin.com/in/sanjay--n');
+              setVal(el, 'https://www.linkedin.com/in/candidate');
             } else if (labelText.includes('github')) {
-              setVal(el, 'https://github.com/RNS-Forge');
+              setVal(el, 'https://github.com/candidate');
             } else if (labelText.includes('portfolio') || labelText.includes('website') || labelText.includes('other')) {
-              setVal(el, 'https://rns-forge.github.io/RNS_Professional_Profile/');
+              setVal(el, 'https://candidate.portfolio.dev');
             } else if (labelText.includes('tinkering') || labelText.includes('ai') || labelText.includes('automation') || labelText.includes('summary')) {
-              setVal(el, '2+ years of hands-on experience developing scalable full-stack software, agentic AI pipelines, microservices, and modern web architectures at Axodian. Deeply proficient in Python, FastAPI, React, SQL, and LLM APIs.');
+              setVal(el, '2+ years of hands-on experience developing scalable full-stack software, agentic AI pipelines, microservices, and modern web architectures. Deeply proficient in Python, FastAPI, React, SQL, and LLM APIs.');
             } else if (!el.value) {
-              setVal(el, 'Sanjay N — Full Stack & Generative AI Engineer (2+ years experience) specializing in scalable architectures, Python, microservices, and AI-enabled software solutions.');
+              setVal(el, 'Full Stack & Generative AI Engineer (2+ years experience) specializing in scalable architectures, Python, microservices, and AI-enabled software solutions.');
             }
           } else if (el.tagName === 'SELECT') {
             const opts = Array.from(el.options);

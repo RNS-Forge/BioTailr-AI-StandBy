@@ -39,7 +39,7 @@ const { getTargetTab, connectWebSocket, cdpEval } = require('../core/cdp-client'
     appliedJobs: [
       { title: 'Python Backend Engineer', company: 'Snayu AI', time: '14:05:22' },
       { title: 'Gen AI Developer', company: 'Tata Consultancy Services', time: '14:12:44' },
-      { title: 'Full Stack Engineer', company: 'Axodian Technologies', time: '14:21:10' }
+      { title: 'Full Stack Engineer', company: 'Tech Enterprises', time: '14:21:10' }
     ],
     failedJobs: [
       { title: 'AI ML Developer', company: 'Infosys', reason: 'No Easy Apply button' },
