@@ -1,11 +1,11 @@
 {
   "personal": {
-    "firstName": "Candidate",
-    "lastName": "",
-    "fullName": "Candidate",
-    "email": "candidate@example.com",
-    "phone": "9876543210",
-    "city": "Bangalore",
+    "firstName": "Sanjay",
+    "lastName": "N",
+    "fullName": "Sanjay N",
+    "email": "sanjay.n.ihub@snsgroups.com",
+    "phone": "9840123456",
+    "city": "Coimbatore",
     "state": "Karnataka",
     "country": "India",
     "postalCode": "560001",
@@ -22,10 +22,10 @@
     "currentVisaStatus": "Citizen"
   },
   "experience": {
-    "totalYears": 2,
+    "totalYears": 3,
     "noticePeriodDays": 15,
-    "currentTitle": "Software Development Engineer",
-    "currentCompany": "Technology Company",
+    "currentTitle": "AI Engineer & Full Stack Lead",
+    "currentCompany": "RNS Solutions",
     "currentSalary": "600000",
     "expectedSalary": "1000000",
     "currentSalaryLpa": "6",
